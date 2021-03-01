@@ -1,0 +1,22 @@
+# Site settings
+title: "max dev blog & other stuff"
+bye_message: "Thx!"
+baseurl: "/"
+url: "https://gjuniioor.github.io"
+# disqus: gjuniioor
+
+# Header settings
+name: "maksymilian"
+surname: "babarowski"
+source_code:
+    server: "github.com"
+    nick: "k0mmsussert0d"
+blog:
+    server: "wordpress.com"
+    nick: "k0mmsussert0d"
+
+# Build settings
+markdown: kramdown
+permalink: /:categories/:title/
+include:
+    - files/_babarowski-public.pgp

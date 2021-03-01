@@ -1,0 +1,23 @@
+<header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"{{ site.name }}"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"{{ site.surname }}"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"{{ site.source_code.nick }}"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://{{ site.source_code.server }}/{{ site.source_code.nick }}" target="_blank">https://{{ site.source_code.server }}/<span class="reserved">%s\n</span></span></a>",github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>,name,surname);
+    </p>
+  </div>
+</header>
+
+{% include menu.html %}
