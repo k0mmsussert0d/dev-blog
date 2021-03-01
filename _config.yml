@@ -20,3 +20,4 @@ markdown: kramdown
 permalink: /:categories/:title/
 include:
     - files/_babarowski-public.pgp
+destination: ./build
