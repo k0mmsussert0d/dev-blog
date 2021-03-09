@@ -72,7 +72,7 @@ xxd nfo-rel_nfo-0.bin | head -1
 00000000: 314e 0000 789c ed5c dd72 dbc6 92be dfaa  1N..x..\.r......
 ```
 
-After confirming it with numerous other files, it seems all of them share the same `0x4` and `0x5` bytes. What does it mean in terms of zlib compression?
+After confirming it with numerous other files, it seems all of them share the same `0x2, 0x3`, `0x4` and `0x5` bytes. What does it mean in terms of zlib compression?
 
 My first steps lead me to [RFC 1950\[4\]][4] stating, that:
 - `0x0` defines CMF (Compression Method and flags)
@@ -81,7 +81,7 @@ My first steps lead me to [RFC 1950\[4\]][4] stating, that:
 - everything beyond that point is compressed data
 - files ends with Adler-32 checksum
 
-Considering that all the files share the same 4th and 5th byte, that are supposed to be either part of compression stream or FDICT while `0x0` and `0x1` are always different, it doesn't make much of a sense.
+Considering that all the files share the same bytes from 3rd to 6th, that are supposed to be either part of compression stream or FDICT while 1st and 2nd one are always different, it doesn't make much of a sense.
 
 After hours of searching, I found [this stackoverflow question\[5\]][5] asked by someone struggling with a similar problem. Upgrading zlib in some networking library broke the mutual compatibility between resources using old and new version of that library.
 
@@ -124,7 +124,7 @@ It seems it worked. Let's check out the output:
 ![Screenshot showing decompressed file]({{ site.baseurl }}images/2020/zzzz.png)
 
 Victory! Now, in order to extract all the nfos from the database, I wrote this nice little Python script:
-```
+```python
 from pathlib import Path
 import zlib
 
