@@ -16,7 +16,7 @@ Looking around the web for old [pre databases\[0\]][0] I stumbled upon [this nic
 
 <!--break-->
 
-To briefly give an idea of how the table looks like:
+To briefly give an idea on how the table looks like:
 
 ```
 > SELECT COLUMN_NAME, ORDINAL_POSITION, COLUMNT_TYPE FROM information_schema.columns where TABLE_NAME='nfo'
@@ -65,7 +65,7 @@ $ xxd nfo-rel_nfo.bin | head -1
 00000000: 2224 0000 789c a599 dd76 dbb8 1180 eff5  "$..x....v......
 ```
 
-Perhaps it worth take a look at other file?
+Perhaps it's worth take a look at other file?
 
 ```
 xxd nfo-rel_nfo-0.bin | head -1
