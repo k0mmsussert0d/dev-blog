@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Fix JetBrains IDEA IntelliJ not working on bspwm (gray window issue)"
-date: 2020-07-20 01:00:00
+date: 2021-07-20 01:00:00
 categories:
     - blog
 tags:
