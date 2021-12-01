@@ -135,7 +135,9 @@ Dolphin installed separately from KDE does not feature themes. To use default ic
 
 ### Dark theme (partially)
 
-Default theme of Dolphin file chooser is bright and it might not fit well with dark-color rices. While changing theme for Dolphin file browser is possible through Qt5 settings, **theme settings do not apply to the file chooser**.
+Default theme of Dolphin file chooser is bright and it might not fit well with dark-color rices. While changing theme for Dolphin file browser is possible through Qt5 settings, ~~theme settings do not apply to the file chooser~~.
+
+*UPDATE: It took several reboots for the file chooser to start respecting dark Qt5 theme, however I don't know cause behind this behavior. Feel free to follow instructions below and it might work for you out-of-the-box or after a few days of some sort of transition.*
 
 Changing Qt5 apps theme without KDE Plasma is somewhat challenging on its own, so I'll explain the method I used, but unfortunately it won't be any of help for file chooser color scheme.
 
