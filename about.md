@@ -18,7 +18,7 @@ If you'd like to contact me, please use the following email:
 [My PGP key]({{ site.baseurl }}files/_babarowski-public.pgp)
 
 Alternatively, you can try catching me on IRC:
- - haniaF@freenode/IRCnet/Rizon
+ - haniaF@LiberaChat/Rizon
  - kmsrtd@EFnet
 
 <hr />
