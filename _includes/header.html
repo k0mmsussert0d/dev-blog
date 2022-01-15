@@ -1,5 +1,13 @@
 <header class="row">
   <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
     <h1 class="">max dev blog & other stuff</h1>
     <p>
     <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"{{ site.name }}"</span>;
@@ -19,5 +27,24 @@
     </p>
   </div>
 </header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
 
 {% include menu.html %}
