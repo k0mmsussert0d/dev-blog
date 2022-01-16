@@ -12,9 +12,9 @@ tags:
 
 ![GTKFileChooser window]( {{ site.baseurl }}images/2021/gtkfilechooser.png)
 
-GTK, while being widely adopted and utilized by thousands of apps, still has that unresolved [Add an "icon view with thumbnails\[0\]][0] issue that has been residing in the project bug tracker for over 17 years (at the time of writing this article, November 2021). Personally, I've learned about it fairly recently reading [the article comparing GtkFileChooser to a clogged toilet\[1\]][1], which explains how the inconvenience caused by the issue mostly go unnoticed by many users for years (that includes me). It seems like it was a turning point in life of the issue, as now its presence is being brought up on almost a daily basis in many informal tech communities. Most often, the purpose is scapegoating GTK as an entirety. The reasoning is that if such a conceptually simple, UX-crucial and obviously present at any notable competitor feature cannot be implemented since almost beginning of the project, then something is seriously wrong with the project itself. Perhaps it's a convoluted codebase, bad maintaining or inadequate concepts fossilized into the core of the project.
+GTK, while being widely adopted and utilized by thousands of apps is still suffering from that unresolved [Add an "icon view with thumbnails"\[0\]][0] issue that has been residing in the project bug tracker for over 17 years (at the time of writing this article, November 2021). Personally, I've learned about it fairly recently reading [the article comparing GtkFileChooser to a clogged toilet\[1\]][1], which explains how the inconvenience caused by the issue mostly went unnoticed by many users (including me) for years. It seems like it was a turning point in the life of the issue, as now its presence is being brought up on almost a daily basis in many informal tech communities. Most often, the purpose is scapegoating GTK as an entirety. The reasoning is that if such a conceptually simple, UX-crucial and obviously present at any notable competitor feature cannot be implemented since almost beginning of the project, then something is seriously wrong with the project itself. Perhaps it's a convoluted codebase, bad maintaining or inadequate concepts fossilized into the core of the project.
 
-I had used GNOME as my DE for 4 years. This means I was obviously affected by the issue, but chose not to care about it for a while. Since a few months, I've been using only WMs for my daily work, which gave me a bit more flexibility in choosing the tools I like. This post explains, how I installed alternative file chooser and set it as a default one first in Firefox, then (almost) globally on my Arch Linux setup.
+I had used GNOME as my DE for 4 years. This means I was obviously affected by the issue, but chose not to care about it for a while. Since a few months, I've been using only WMs for my daily work, which gave me a bit more flexibility in choosing the tools I like. This post explains how I installed alternative file chooser and set it to be the default one first in Firefox and (almost) globally on my Arch Linux setup.
 
 <!--break-->
 
@@ -22,7 +22,7 @@ I had used GNOME as my DE for 4 years. This means I was obviously affected by th
 
 A brief research conducts GNOME competitor – KDE includes a file chooser with said functionality implemented. File chooser is actually a part of KDE's default file manager called [Dolphin\[2\]][2].
 
-It can be installed on Arch as a separate package (without KDE and hundreds of dependencies). In my case, it required these dependencies to be installed:
+It can be installed on Arch as a separate package (without KDE and most of the dependencies). In my case, it required these dependencies to be installed:
 ```
 $ sudo pacman -S dolphin
 resolving dependencies...
@@ -70,7 +70,7 @@ Those caring about "not bloating screenfetch" might stop reading right here. I d
 
 ## Enabling Dolphin as default file chooser
 
-Now Dolphin is installed, but other applications needs to be instructed to use it instead of GtkFileChooser. Unfortunately, whether GTK application is able to use alternative system dialogs or not depends on it implementing `xdg-desktop-portal` front-end service. Good portion of modern software does it, but be prepared to keep using GtkFileChooser in some apps.
+Now Dolphin is installed, but other applications needs to be instructed to use its component instead of GtkFileChooser. Unfortunately, whether GTK application is able to use alternative system dialogs or not depends on it implementing `xdg-desktop-portal` front-end service. Good portion of modern software does it, but be prepared to keep using GtkFileChooser in some apps.
 
 Install packages `xdg-desktop-portal xdg-desktop-portal-kde`. Set environment variable `GTK_USE_PORTAL=1` in `/etc/environment` to apply this solution globally, or in `~/.bash_profile` to apply it for a user[\[3\]][3].
 
@@ -90,7 +90,7 @@ Let's try briefly checking what's the problem with each of them.
 
 ### Electron apps support XDG_DESKTOP_PORTAL since 14
 
-Support for XDG_DESKTOP_PORTAL has been [merged to Electron in April 2021\[4\]][4], however it was evaluated as not stable enough to be introduced in 13.x version and postponed for release of Electron 14. [The release happened on 31th August, 2021\[5\]][5]. Given the amount of time passed since then, it's no wonder that few apps moved to Electron 14 from earlier versions.
+Support for XDG_DESKTOP_PORTAL has been [merged to Electron in April 2021\[4\]][4], however it was evaluated as not stable enough to be introduced in 13.x version and postponed for the release of Electron 14. [The release happened on 31th August, 2021\[5\]][5]. Given the amount of time passed since then, it's no wonder that few apps moved to Electron 14 from earlier versions.
 
 In case of VSCode, a version of Electron it's running on can be easily checked by opening developer console (Help > Toggle Developer Options) and executing:
 ```
@@ -127,7 +127,7 @@ Out of a box, Dolphin file chooser renders thumbnails for most of image file typ
 
 Install optional dependency `ffmpegthumbs`. This provides functionality of rendering thumbnails for most video files.
 
-You might be tempted to install other optional dependencies, like `kdegraphics-thumbnailers` or `taglib` for generating thumbnails for other types of files. Keep in mind they work in main Dolphin file browser, not in the file chooser. Unless you're going to use Dolphin file browser, installing them doesn't make any difference.
+You might be tempted to install other optional dependencies, like `kdegraphics-thumbnailers` or `taglib` for generating thumbnails for other types of files. Keep in mind they work in main Dolphin file browser, not in the file chooser. Unless you're going to use Dolphin file browser itself, installing them doesn't make any difference.
 
 ### Icons
 
@@ -141,7 +141,7 @@ Default theme of Dolphin file chooser is bright and it might not fit well with d
 
 Changing Qt5 apps theme without KDE Plasma is somewhat challenging on its own, so I'll explain the method I used, but unfortunately it won't be any of help for file chooser color scheme.
 
-Install `qt5ct` and run it. If you see a warning about program not properly configured, set `QT_QPA_PLATFORMTHEME=qt5ct` environment variable and run it again.
+Install `breeze`, `qt5ct` and run it. If you see a warning about program not properly configured, set `QT_QPA_PLATFORMTHEME=qt5ct` environment variable and run it again.
 
 In the *Appearance* tab, select style *Breeze* and custom *Palette* called *darker*. Click *Ok* and re-run Dolphin.
 
