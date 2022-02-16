@@ -67,5 +67,5 @@ Create `post-receive`:
 ```bash
 #!/bin/bash
 
-./push-webhook.sh 2>&1 | tee -a "$(date +'post-receive_%Y-%m-%d').log"
+$GIT_DIR/hooks/push-webhook.sh 2>&1 | tee -a "$(date +'post-receive_%Y-%m-%d').log" >/dev/null
 ```
