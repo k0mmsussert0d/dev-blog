@@ -20,9 +20,11 @@ Within this short entry I want to demonstrate setup I've came up with for **sync
 
 Before proceeding, you should be in control of a [Backblaze B2 account\[2\]][2] with a configured bucket to upload dumps to. Alternatively, you should be fine using any other remote storage provided [supported by rclone\[3\]][3]. My choice of Backblaze is justified by the affordable pricing model they employ.
 
+You should also have a configured backup job in PVE that you wish to extend with cloud backup feature.
+
 ## Backup job hook scripts
 
-[Hook script\[4\]][4], in terms of PVE's backups functionality, is an optional script set per-job called at various phases of the backup process. An example Perl script provided with `pve-manager` documentation enumerates the phases script might be called at:
+A [hook script\[4\]][4], in terms of PVE's backups terminology, is an optional script set per-job called at various phases of the backup process. An example Perl script provided with `pve-manager` documentation enumerates the phases script might be called at:
 
 ```
 job-start
@@ -48,6 +50,8 @@ Assuming that you've already created a Backblaze bucket, you should be in posses
 Install `rclone` on the machine running PVE instance and run `rclone config`. Use the interactive prompt to configure the access to the bucket. Try running commands like `rclone ls <bucket-name>:` and `rclone copy <sample-file> <bucket-name>:` to verify if it works correctly. `rclone` should be capable of both reading and writing files.
 
 ## Preparing sync script
+
+At this point, all ingredients needed for preparing a hook script should be ready. 
 
 ## Links
 ~~~
