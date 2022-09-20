@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Mocking @AuthenticationPrincipal with custom UserDetails object | max dev blog & other stuff</title>
+
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="/css/bootstrap-3.3.6/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+
+    <link rel="shortcut icon" href="/images/favicon.jpg">
+
+    <link rel="alternate" type="application/atom+xml" title="Atom Feed" href="/feed/"> 
+
+</head>
+
+
+    <body>
+      <div class="container">
+
+        <header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"maksymilian"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"babarowski"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"k0mmsussert0d"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://github.com/k0mmsussert0d" target="_blank">https://github.com/<span class="reserved">%s\n</span></span></a>", github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>, name, surname);
+    </p>
+  </div>
+</header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
+
+<div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="menu">
+      <ul>
+          <li><a href="/">home</a></li>
+          <li><a href="/blog/">archive</a></li>
+          <li><a href="/about/">about</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2">
+            <main>
+            <div class="post">
+
+  <header class="post-header">
+    <h1>Mocking @AuthenticationPrincipal with custom UserDetails object</h1>
+  </header>
+
+  <article class="post-content">
+  <div class="post">
+
+  <header class="post-header">
+    <p class="meta">
+        Sep 20, 2020
+        
+        
+        •
+        <span><a href="/category/#java" class="reserved">java</a>,</span><span><a href="/category/#junit" class="reserved">junit</a>,</span><span><a href="/category/#spring" class="reserved">spring</a>,</span><span><a href="/category/#mockito" class="reserved">mockito</a></span>
+    </p>
+  </header>
+
+  <article class="post-content">
+  <p>Lately I’ve been working on a project involving Spring Boot and Spring Security. It includes stateless API for authenticating users and restricting access to specific HTTP endpoints. I followed this <a href="https://golb.hplar.ch/2019/05/stateless.html">Stateless Authentication with Spring Security[0]</a> article. Sessions associated with users are stored in the database table, while users authenticate with session ID in <code class="language-plaintext highlighter-rouge">Authorization</code> request header. Pretty much what JWT does, except for I didn’t know about its existene at the moment, lol.</p>
+
+<!--break-->
+
+<p><strong>NOTE: This article follows my journey of debugging the problem, trying different wrong approaches and eventually finding the solution.
+If it’s tldr for you, jump straight to <a href="#final-solution">the solution</a>.</strong></p>
+
+<p>Anyway, I took an advantage of <code class="language-plaintext highlighter-rouge">Authentication</code> storing principal object and created a class implementing <code class="language-plaintext highlighter-rouge">UserDetails</code> interface holding my DTO with mapped user entity:</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@RequiredArgsConstructor</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">CustomUserDetails</span> <span class="kd">implements</span> <span class="nc">UserDetails</span> <span class="o">{</span>
+
+    <span class="nd">@Getter</span>
+    <span class="kd">private</span> <span class="kd">final</span> <span class="nc">UserDTO</span> <span class="n">user</span><span class="o">;</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="nc">Collection</span><span class="o">&lt;?</span> <span class="kd">extends</span> <span class="nc">GrantedAuthority</span><span class="o">&gt;</span> <span class="nf">getAuthorities</span><span class="o">()</span> <span class="o">{</span>
+        <span class="nc">RoleDTO</span> <span class="n">role</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="na">getRole</span><span class="o">();</span>
+        <span class="nc">Set</span><span class="o">&lt;</span><span class="nc">GrantedAuthority</span><span class="o">&gt;</span> <span class="n">rolesSet</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">HashSet</span><span class="o">&lt;&gt;();</span>
+        <span class="n">rolesSet</span><span class="o">.</span><span class="na">add</span><span class="o">(</span><span class="k">new</span> <span class="nc">SimpleGrantedAuthority</span><span class="o">(</span><span class="s">"ROLE_"</span> <span class="o">+</span> <span class="n">role</span><span class="o">.</span><span class="na">getRoleName</span><span class="o">()));</span>
+        <span class="k">return</span> <span class="n">rolesSet</span><span class="o">;</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="nc">String</span> <span class="nf">getPassword</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">user</span><span class="o">.</span><span class="na">getPassword</span><span class="o">();</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="nc">String</span> <span class="nf">getUsername</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">user</span><span class="o">.</span><span class="na">getUsername</span><span class="o">();</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">isAccountNonExpired</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">user</span><span class="o">.</span><span class="na">getIsActive</span><span class="o">();</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">isAccountNonLocked</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">user</span><span class="o">.</span><span class="na">getIsActive</span><span class="o">();</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">isCredentialsNonExpired</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">user</span><span class="o">.</span><span class="na">getIsActive</span><span class="o">();</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">isEnabled</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="n">user</span><span class="o">.</span><span class="na">getIsActive</span><span class="o">();</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<p>Essentially, a proxy class implementing <code class="language-plaintext highlighter-rouge">UserDetails</code> with a <code class="language-plaintext highlighter-rouge">UserDTO</code> composed in and using its properties for resolving <code class="language-plaintext highlighter-rouge">UserDetails</code> implemented methods. This approach allowed me to very easily access properties of a user accessing an endpoint. Consider this <code class="language-plaintext highlighter-rouge">GET /user/images/</code> private endpoint, which is supposed to return authenticated user’s uploaded images:</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">public</span> <span class="nc">ResponseEntity</span><span class="o">&lt;</span><span class="nc">List</span><span class="o">&lt;</span><span class="nc">ImageDTO</span><span class="o">&gt;&gt;</span> <span class="nf">userImages</span><span class="o">(</span><span class="nd">@AuthenticationPrincipal</span> <span class="nc">CustomUserDetails</span> <span class="n">userDetails</span><span class="o">)</span> <span class="o">{</span>
+       <span class="nc">UserDTO</span> <span class="n">user</span> <span class="o">=</span> <span class="n">userDetails</span><span class="o">.</span><span class="na">getUser</span><span class="o">();</span>
+
+       <span class="nc">Optional</span><span class="o">&lt;</span><span class="nc">List</span><span class="o">&lt;</span><span class="nc">ImageDTO</span><span class="o">&gt;&gt;</span> <span class="n">images</span> <span class="o">=</span> <span class="nc">Optional</span><span class="o">.</span><span class="na">ofNullable</span><span class="o">(</span><span class="n">imageDTOService</span><span class="o">.</span><span class="na">findAllUploadedBy</span><span class="o">(</span><span class="n">user</span><span class="o">));</span>
+       <span class="k">if</span> <span class="o">(</span><span class="n">images</span><span class="o">.</span><span class="na">isEmpty</span><span class="o">())</span> <span class="o">{</span>
+           <span class="k">return</span> <span class="nc">ResponseEntity</span><span class="o">.</span><span class="na">status</span><span class="o">(</span><span class="nc">HttpStatus</span><span class="o">.</span><span class="na">OK</span><span class="o">).</span><span class="na">body</span><span class="o">(</span><span class="nc">Collections</span><span class="o">.</span><span class="na">emptyList</span><span class="o">());</span>
+       <span class="o">}</span>
+
+    <span class="k">return</span> <span class="nc">ResponseEntity</span><span class="o">.</span><span class="na">status</span><span class="o">(</span><span class="nc">HttpStatus</span><span class="o">.</span><span class="na">OK</span><span class="o">).</span><span class="na">body</span><span class="o">(</span><span class="n">images</span><span class="o">.</span><span class="na">get</span><span class="o">());</span>
+<span class="o">}</span> 
+</code></pre></div></div>
+
+<p>To me it looks nice and elegant. This custom <code class="language-plaintext highlighter-rouge">UserDetailsService</code> returns <code class="language-plaintext highlighter-rouge">CustomUserDetails</code> based on what persistence layer returns, so the encapsulated DTO object can always be used for interaction with other DTOs or persistence services.</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@Service</span>
+<span class="nd">@RequiredArgsConstructor</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">CustomUserDetailsService</span> <span class="kd">implements</span> <span class="nc">UserDetailsService</span> <span class="o">{</span>
+
+    <span class="kd">private</span> <span class="kd">final</span> <span class="nc">UserDTOService</span> <span class="n">userDTOService</span><span class="o">;</span>
+
+    <span class="nd">@Override</span>
+    <span class="kd">public</span> <span class="nc">UserDetails</span> <span class="nf">loadUserByUsername</span><span class="o">(</span><span class="nc">String</span> <span class="n">username</span><span class="o">)</span> <span class="kd">throws</span> <span class="nc">UsernameNotFoundException</span> <span class="o">{</span>
+
+        <span class="nc">Optional</span><span class="o">&lt;</span><span class="nc">UserDTO</span><span class="o">&gt;</span> <span class="n">user</span> <span class="o">=</span> <span class="nc">Optional</span><span class="o">.</span><span class="na">ofNullable</span><span class="o">(</span><span class="n">userDTOService</span><span class="o">.</span><span class="na">findByUsername</span><span class="o">(</span><span class="n">username</span><span class="o">));</span>
+
+        <span class="k">if</span> <span class="o">(</span><span class="n">user</span><span class="o">.</span><span class="na">isEmpty</span><span class="o">())</span> <span class="o">{</span>
+            <span class="k">throw</span> <span class="k">new</span> <span class="nf">UsernameNotFoundException</span><span class="o">(</span><span class="s">"Username "</span> <span class="o">+</span> <span class="n">username</span> <span class="o">+</span> <span class="s">" not found"</span><span class="o">);</span>
+        <span class="o">}</span>
+
+        <span class="k">return</span> <span class="k">new</span> <span class="nf">CustomUserDetails</span><span class="o">(</span><span class="n">user</span><span class="o">.</span><span class="na">get</span><span class="o">());</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<h2 id="how-do-i-test-this-controller">How do I test this controller?</h2>
+
+<p>However, this approach implies some issues when it comes to testing the controller.</p>
+
+<p>While trying to test <code class="language-plaintext highlighter-rouge">UserControllerImpl.userImages()</code> I realized I need to somehow mock the parameter <code class="language-plaintext highlighter-rouge">@AuthenticationPrincipal CustomUserDetails userDetails</code>. Not knowing much about it, I did some googling and found out, that <a href="https://stackoverflow.com/questions/46615504/springboottest-mock-authentication-principal-with-a-custom-user-does-not-work">others[1]</a> use <a href="https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithMockUser.html">@WithMockUser[2]</a> annotation in situations like that. However, this turned out unsatisfactionary for my case, since the method I want to test doesn’t just restrict an access to some commonly-used resource. If I was, for example, testing the accessibility of resources that should only be used by specified group of users, that would be perfect. Using <code class="language-plaintext highlighter-rouge">@WithMockUser</code> I can specify roles and/or authorities required to access the resource, then test if access is granted (or properly rejected for mocked users with insufficient authorities). Or even a simpler case, having an endpoint returning user’s username. Just a quick <code class="language-plaintext highlighter-rouge">@WithMockUser(username = "foo")</code> and a job is done!</p>
+
+<p>Meanwhile, my resource uses the principal to pass the encapsulated user DTO to the service. It delegates the job to the persistence layer, which requires DTO object which can be later be mapped to full-fleged entity. Therefore, I needed full-fleged authentication principal mocking.</p>
+
+<h2 id="trying-to-mock-the-principal-by-interference-in-security-context">Trying to mock the principal by interference in Security Context</h2>
+
+<p>What exactly is <code class="language-plaintext highlighter-rouge">@AuthenticationPrincipal</code>? According to the <a href="https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/core/annotation/AuthenticationPrincipal.html">Spring Security documentation[3]</a>, it ties up a method argument with <code class="language-plaintext highlighter-rouge">Authentication.getPrincipal()</code> return object. <code class="language-plaintext highlighter-rouge">Authentication</code> object can be easily obtained from <code class="language-plaintext highlighter-rouge">SecurityContextHolder</code>, so using some help of this <a href="https://stackoverflow.com/a/46631015/6158307">stack overflow answer[4]</a> I came up with these few lines of code:</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@SpringBootTest</span>
+<span class="nd">@AutoConfigureMockMvc</span>
+<span class="kd">class</span> <span class="nc">UserControllerImplTest</span> <span class="o">{</span>
+
+    <span class="nd">@Test</span>
+    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">whenGetUserImages_andUserIsAuthorized_thenReturnListOfImages</span><span class="o">()</span> <span class="kd">throws</span> <span class="nc">Exception</span> <span class="o">{</span>
+        <span class="nc">String</span> <span class="n">username</span> <span class="o">=</span> <span class="s">"username"</span><span class="o">;</span>
+        <span class="nc">UserDTO</span> <span class="n">userDTO</span> <span class="o">=</span> <span class="n">getSampleUser</span><span class="o">(</span><span class="n">username</span><span class="o">);</span>
+        <span class="nc">CustomUserDetails</span> <span class="n">userDetails</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">CustomUserDetails</span><span class="o">(</span><span class="n">userDTO</span><span class="o">);</span>
+
+        <span class="nc">Authentication</span> <span class="n">authentication</span> <span class="o">=</span> <span class="nc">Mockito</span><span class="o">.</span><span class="na">mock</span><span class="o">(</span><span class="nc">Authentication</span><span class="o">.</span><span class="na">class</span><span class="o">);</span>
+        <span class="nc">SecurityContext</span> <span class="n">securityContext</span> <span class="o">=</span> <span class="nc">Mockito</span><span class="o">.</span><span class="na">mock</span><span class="o">(</span><span class="nc">SecurityContext</span><span class="o">.</span><span class="na">class</span><span class="o">);</span>
+        <span class="nc">AuthCookieFilter</span> <span class="n">authCookieFilter</span> <span class="o">=</span> <span class="nc">Mockito</span><span class="o">.</span><span class="na">mock</span><span class="o">(</span><span class="nc">AuthCookieFilter</span><span class="o">.</span><span class="na">class</span><span class="o">);</span>
+
+
+        <span class="nc">Mockito</span><span class="o">.</span><span class="na">when</span><span class="o">(</span><span class="n">securityContext</span><span class="o">.</span><span class="na">getAuthentication</span><span class="o">()).</span><span class="na">thenReturn</span><span class="o">(</span><span class="n">authentication</span><span class="o">);</span>
+        <span class="nc">SecurityContextHolder</span><span class="o">.</span><span class="na">setContext</span><span class="o">(</span><span class="n">securityContext</span><span class="o">);</span>
+
+        <span class="nc">Mockito</span><span class="o">.</span><span class="na">when</span><span class="o">(</span><span class="n">authentication</span><span class="o">.</span><span class="na">getPrincipal</span><span class="o">()).</span><span class="na">thenReturn</span><span class="o">(</span><span class="n">userDetails</span><span class="o">);</span>
+
+        <span class="nc">Mockito</span><span class="o">.</span><span class="na">doNothing</span><span class="o">().</span><span class="na">when</span><span class="o">(</span><span class="n">authCookieFilter</span><span class="o">).</span><span class="na">doFilter</span><span class="o">(</span><span class="nc">Mockito</span><span class="o">.</span><span class="na">any</span><span class="o">(</span><span class="nc">ServletRequest</span><span class="o">.</span><span class="na">class</span><span class="o">),</span> <span class="nc">Mockito</span><span class="o">.</span><span class="na">any</span><span class="o">(</span><span class="nc">ServletResponse</span><span class="o">.</span><span class="na">class</span><span class="o">),</span> <span class="nc">Mockito</span><span class="o">.</span><span class="na">any</span><span class="o">(</span><span class="nc">FilterChain</span><span class="o">.</span><span class="na">class</span><span class="o">));</span>
+
+        <span class="nc">List</span><span class="o">&lt;</span><span class="nc">ImageDTO</span><span class="o">&gt;</span> <span class="n">images</span> <span class="o">=</span> <span class="n">getSampleImages</span><span class="o">();</span>
+        <span class="n">images</span><span class="o">.</span><span class="na">forEach</span><span class="o">(</span><span class="n">imageDTO</span> <span class="o">-&gt;</span> <span class="n">imageDTO</span><span class="o">.</span><span class="na">setUploader</span><span class="o">(</span><span class="n">userDTO</span><span class="o">));</span>
+
+        <span class="nc">Mockito</span><span class="o">.</span><span class="na">when</span><span class="o">(</span><span class="n">imageDTOService</span><span class="o">.</span><span class="na">findAllUploadedBy</span><span class="o">(</span><span class="n">userDTO</span><span class="o">)).</span><span class="na">thenReturn</span><span class="o">(</span><span class="n">images</span><span class="o">);</span>
+
+        <span class="n">mockMvc</span><span class="o">.</span><span class="na">perform</span><span class="o">(</span><span class="n">get</span><span class="o">(</span><span class="s">"/user/images/"</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">andExpect</span><span class="o">(</span><span class="n">status</span><span class="o">().</span><span class="na">isOk</span><span class="o">())</span>
+                <span class="o">.</span><span class="na">andExpect</span><span class="o">(</span><span class="n">content</span><span class="o">().</span><span class="na">contentType</span><span class="o">(</span><span class="nc">MediaType</span><span class="o">.</span><span class="na">APPLICATION_JSON</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">andExpect</span><span class="o">(</span><span class="n">content</span><span class="o">().</span><span class="na">json</span><span class="o">(</span><span class="s">"expected json response content goes here"</span><span class="o">);</span>
+    <span class="o">}</span>
+
+    <span class="kd">private</span> <span class="nc">UserDTO</span> <span class="nf">getSampleUser</span><span class="o">(</span><span class="nc">String</span> <span class="n">username</span><span class="o">)</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="nc">UserDTO</span><span class="o">.</span><span class="na">builder</span><span class="o">()</span>
+                <span class="o">.</span><span class="na">username</span><span class="o">(</span><span class="n">username</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">email</span><span class="o">(</span><span class="n">username</span> <span class="o">+</span> <span class="s">"@example.com"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">password</span><span class="o">(</span><span class="s">"password"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">registerTime</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="mi">2020</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">12</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">isActive</span><span class="o">(</span><span class="kc">true</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">build</span><span class="o">();</span>
+    <span class="o">}</span>
+
+    <span class="kd">private</span> <span class="nc">List</span><span class="o">&lt;</span><span class="nc">ImageDTO</span><span class="o">&gt;</span> <span class="nf">getSampleImages</span><span class="o">()</span> <span class="o">{</span>
+        <span class="nc">ImageDTO</span> <span class="n">image1</span> <span class="o">=</span> <span class="n">getSampleImage</span><span class="o">(</span><span class="mi">1L</span><span class="o">,</span> <span class="s">"token1"</span><span class="o">);</span>
+        <span class="nc">ImageDTO</span> <span class="n">image2</span> <span class="o">=</span> <span class="n">getSampleImage</span><span class="o">(</span><span class="mi">2L</span><span class="o">,</span> <span class="s">"token2"</span><span class="o">);</span>
+        <span class="nc">ImageDTO</span> <span class="n">image3</span> <span class="o">=</span> <span class="n">getSampleImage</span><span class="o">(</span><span class="mi">3L</span><span class="o">,</span> <span class="s">"token3"</span><span class="o">);</span>
+
+        <span class="k">return</span> <span class="nc">List</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="n">image1</span><span class="o">,</span> <span class="n">image2</span><span class="o">,</span> <span class="n">image3</span><span class="o">);</span>
+    <span class="o">}</span>
+
+    <span class="kd">private</span> <span class="nc">ImageDTO</span> <span class="nf">getSampleImage</span><span class="o">(</span><span class="nc">Long</span> <span class="n">id</span><span class="o">,</span> <span class="nc">String</span> <span class="n">token</span><span class="o">)</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="nc">ImageDTO</span><span class="o">.</span><span class="na">builder</span><span class="o">()</span>
+                <span class="o">.</span><span class="na">id</span><span class="o">(</span><span class="n">id</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">token</span><span class="o">(</span><span class="n">token</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">isActive</span><span class="o">(</span><span class="kc">true</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">isPublic</span><span class="o">(</span><span class="kc">true</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">uploadTime</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="mi">2020</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">12</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">build</span><span class="o">();</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<p><code class="language-plaintext highlighter-rouge">AuthCookieFilter</code> is my request filter (<code class="language-plaintext highlighter-rouge">GenericFilterBean</code>), scanning requests for <code class="language-plaintext highlighter-rouge">Authorization</code> token, looking their content up in database and setting <code class="language-plaintext highlighter-rouge">Authentication</code> in <code class="language-plaintext highlighter-rouge">SecurityContextHolder</code> if it matches any. I had to silence it, since I’m setting up the Security Context up manually.</p>
+
+<p>Unfortunately, it didn’t work. For some reason, I couldn’t get pass authorization, getting 401 responses all the time. After some time debugging, I found that one of the first culprits of failing the authentication is <code class="language-plaintext highlighter-rouge">ProviderManager.authenticate()</code> throwing a <a href="https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/authentication/ProviderNotFoundException.html">ProviderNotFoundException[5]</a>. So, there’s no <code class="language-plaintext highlighter-rouge">AuthenticationProvider</code> capable of handling my <code class="language-plaintext highlighter-rouge">Authentication</code>, huh? What’s the <code class="language-plaintext highlighter-rouge">Authentication</code> now, anyway? According to the debugger: <code class="language-plaintext highlighter-rouge">Authentication$MockitoMock</code>. Honestly, I don’t really know much about how mocks work internally. How are public properties and methods made visible, how references to them are being passed and most importantly, how is such an object perceived by other components of the application? My guess was that <code class="language-plaintext highlighter-rouge">ProviderManager</code> can’t match any provider with my not-so-ordinary object.</p>
+
+<p>And so, I decided to abadon this idea and keep looking further.</p>
+
+<h2 id="injecting-custom-userdetailsservice">Injecting custom UserDetailsService</h2>
+
+<p>Then I stumbled upon this <a href="https://stackoverflow.com/a/43920932/6158307">stack overflow answer[6]</a>, that made me aware of <a href="https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithUserDetails.html"><code class="language-plaintext highlighter-rouge">@WithUserDetails</code>[7]</a> annotation. Similarly to <code class="language-plaintext highlighter-rouge">@WithMockUser</code> it allows to inject a mock user to the request, but delegating the job of creating <code class="language-plaintext highlighter-rouge">UserDetails</code> object to the developer. <code class="language-plaintext highlighter-rouge">@WithMockUser</code> is higher level functionality, creating a simple <code class="language-plaintext highlighter-rouge">UserDetails</code> based on input parameters. With <code class="language-plaintext highlighter-rouge">@WithUserDetails</code> one needs to provide own <code class="language-plaintext highlighter-rouge">UserDetailsService</code>.</p>
+
+<p>Perfect! I created additional configuration class for such a custom service:</p>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@TestConfiguration</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">SpringSecurityForUserControllerImplTestConfig</span> <span class="o">{</span>
+
+    <span class="nd">@Bean</span>
+    <span class="nd">@Primary</span>
+    <span class="kd">public</span> <span class="nc">UserDetailsService</span> <span class="nf">userDetailsService</span><span class="o">()</span> <span class="o">{</span>
+
+        <span class="nc">UserDTO</span> <span class="n">userDTO</span> <span class="o">=</span> <span class="nc">UserDTO</span><span class="o">.</span><span class="na">builder</span><span class="o">()</span>
+                <span class="o">.</span><span class="na">username</span><span class="o">(</span><span class="s">"username"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">email</span><span class="o">(</span><span class="s">"username@example.com"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">password</span><span class="o">(</span><span class="s">"password"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">registerTime</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="mi">2020</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">12</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">isActive</span><span class="o">(</span><span class="kc">true</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">role</span><span class="o">(</span><span class="nc">RoleDTO</span><span class="o">.</span><span class="na">builder</span><span class="o">().</span><span class="na">roleName</span><span class="o">(</span><span class="s">"USER"</span><span class="o">).</span><span class="na">build</span><span class="o">())</span>
+                <span class="o">.</span><span class="na">build</span><span class="o">();</span>
+        <span class="nc">CustomUserDetails</span> <span class="n">userDetails</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">CustomUserDetails</span><span class="o">(</span><span class="n">userDTO</span><span class="o">);</span>
+
+        <span class="k">return</span> <span class="k">new</span> <span class="nf">InMemoryUserDetailsManager</span><span class="o">(</span><span class="nc">List</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="n">userDetails</span><span class="o">));</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<p>added <code class="language-plaintext highlighter-rouge">@SpringBootTest(classes = SpringSecurityForUserControllerImplTestConfig.class)</code> above tests class and <code class="language-plaintext highlighter-rouge">@WithUserDetails("username")</code> above the test. To retrieve <code class="language-plaintext highlighter-rouge">UserDTO</code> object inside test method I used the following line:</p>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nc">UserDTO</span> <span class="n">userDTO</span> <span class="o">=</span> <span class="o">((</span><span class="nc">CustomUserDetails</span><span class="o">)</span> <span class="nc">SecurityContextHolder</span><span class="o">.</span><span class="na">getContext</span><span class="o">().</span><span class="na">getAuthentication</span><span class="o">().</span><span class="na">getPrincipal</span><span class="o">()).</span><span class="na">getUser</span><span class="o">();</span>
+</code></pre></div></div>
+
+<p>which unfortunately resulted in ClassCastException between <code class="language-plaintext highlighter-rouge">org.springframework.security.core.userdetails.User</code> and my <code class="language-plaintext highlighter-rouge">CustomUserDetails</code>. It turns out, that <code class="language-plaintext highlighter-rouge">InMemoryUserDetailsManager</code> method has this method:</p>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="kd">public</span> <span class="nc">UserDetails</span> <span class="nf">loadUserByUsername</span><span class="o">(</span><span class="nc">String</span> <span class="n">username</span><span class="o">)</span> <span class="kd">throws</span> <span class="nc">UsernameNotFoundException</span> <span class="o">{</span>
+        <span class="nc">UserDetails</span> <span class="n">user</span> <span class="o">=</span> <span class="o">(</span><span class="nc">UserDetails</span><span class="o">)</span><span class="k">this</span><span class="o">.</span><span class="na">users</span><span class="o">.</span><span class="na">get</span><span class="o">(</span><span class="n">username</span><span class="o">.</span><span class="na">toLowerCase</span><span class="o">());</span>
+        <span class="k">if</span> <span class="o">(</span><span class="n">user</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+            <span class="k">throw</span> <span class="k">new</span> <span class="nf">UsernameNotFoundException</span><span class="o">(</span><span class="n">username</span><span class="o">);</span>
+        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+            <span class="k">return</span> <span class="k">new</span> <span class="nf">User</span><span class="o">(</span><span class="n">user</span><span class="o">.</span><span class="na">getUsername</span><span class="o">(),</span> <span class="n">user</span><span class="o">.</span><span class="na">getPassword</span><span class="o">(),</span> <span class="n">user</span><span class="o">.</span><span class="na">isEnabled</span><span class="o">(),</span> <span class="n">user</span><span class="o">.</span><span class="na">isAccountNonExpired</span><span class="o">(),</span> <span class="n">user</span><span class="o">.</span><span class="na">isCredentialsNonExpired</span><span class="o">(),</span> <span class="n">user</span><span class="o">.</span><span class="na">isAccountNonLocked</span><span class="o">(),</span> <span class="n">user</span><span class="o">.</span><span class="na">getAuthorities</span><span class="o">());</span>
+        <span class="o">}</span>
+    <span class="o">}</span>
+</code></pre></div></div>
+
+<p>explictly casting found principals to Spring generic User class, despite my custom implementaion of UserDetails put into it. That’s sad.</p>
+
+<h2 id="final-solution">Final solution</h2>
+<p>Here’s test-scope class with custom <code class="language-plaintext highlighter-rouge">UserDetailsManager</code> implementation altering <code class="language-plaintext highlighter-rouge">InMemoryUserDetailsManager.loadUserByUsername</code> unwanted behavior. It could’ve been done better, this implementation assumes there is only one user object stored inside by the Manager. <code class="language-plaintext highlighter-rouge">UserDTO</code> was turned into a Bean, to allow easy access to it via autowiring from the test class.</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@TestConfiguration</span>
+<span class="kd">public</span> <span class="kd">class</span> <span class="nc">SpringSecurityForUserControllerImplTestConfig</span> <span class="o">{</span>
+
+    <span class="nd">@Bean</span>
+    <span class="kd">public</span> <span class="nc">UserDTO</span> <span class="nf">testUser</span><span class="o">()</span> <span class="o">{</span>
+        <span class="k">return</span> <span class="nc">UserDTO</span><span class="o">.</span><span class="na">builder</span><span class="o">()</span>
+                <span class="o">.</span><span class="na">username</span><span class="o">(</span><span class="s">"username"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">email</span><span class="o">(</span><span class="s">"username@example.com"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">password</span><span class="o">(</span><span class="s">"password"</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">registerTime</span><span class="o">(</span><span class="nc">LocalDateTime</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="mi">2020</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">1</span><span class="o">,</span> <span class="mi">12</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">isActive</span><span class="o">(</span><span class="kc">true</span><span class="o">)</span>
+                <span class="o">.</span><span class="na">role</span><span class="o">(</span><span class="nc">RoleDTO</span><span class="o">.</span><span class="na">builder</span><span class="o">().</span><span class="na">roleName</span><span class="o">(</span><span class="s">"USER"</span><span class="o">).</span><span class="na">build</span><span class="o">())</span>
+                <span class="o">.</span><span class="na">build</span><span class="o">();</span>
+    <span class="o">}</span>
+
+    <span class="nd">@Bean</span>
+    <span class="nd">@Primary</span>
+    <span class="kd">public</span> <span class="nc">UserDetailsService</span> <span class="nf">userDetailsService</span><span class="o">()</span> <span class="o">{</span>
+
+        <span class="nc">CustomUserDetails</span> <span class="n">userDetails</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">CustomUserDetails</span><span class="o">(</span><span class="n">testUser</span><span class="o">());</span>
+
+        <span class="k">return</span> <span class="k">new</span> <span class="nf">UserDetailsManager</span><span class="o">()</span> <span class="o">{</span>
+
+            <span class="kd">private</span> <span class="kd">final</span> <span class="nc">InMemoryUserDetailsManager</span> <span class="n">inMemoryUserDetailsManager</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">InMemoryUserDetailsManager</span><span class="o">(</span><span class="nc">List</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="n">userDetails</span><span class="o">));</span>
+
+
+            <span class="nd">@Override</span>
+            <span class="kd">public</span> <span class="kt">void</span> <span class="nf">createUser</span><span class="o">(</span><span class="nc">UserDetails</span> <span class="n">userDetails</span><span class="o">)</span> <span class="o">{</span>
+                <span class="k">this</span><span class="o">.</span><span class="na">inMemoryUserDetailsManager</span><span class="o">.</span><span class="na">createUser</span><span class="o">(</span><span class="n">userDetails</span><span class="o">);</span>
+            <span class="o">}</span>
+
+            <span class="nd">@Override</span>
+            <span class="kd">public</span> <span class="kt">void</span> <span class="nf">updateUser</span><span class="o">(</span><span class="nc">UserDetails</span> <span class="n">userDetails</span><span class="o">)</span> <span class="o">{</span>
+                <span class="k">this</span><span class="o">.</span><span class="na">inMemoryUserDetailsManager</span><span class="o">.</span><span class="na">updateUser</span><span class="o">(</span><span class="n">userDetails</span><span class="o">);</span>
+            <span class="o">}</span>
+
+            <span class="nd">@Override</span>
+            <span class="kd">public</span> <span class="kt">void</span> <span class="nf">deleteUser</span><span class="o">(</span><span class="nc">String</span> <span class="n">s</span><span class="o">)</span> <span class="o">{</span>
+                <span class="k">this</span><span class="o">.</span><span class="na">inMemoryUserDetailsManager</span><span class="o">.</span><span class="na">deleteUser</span><span class="o">(</span><span class="n">s</span><span class="o">);</span>
+            <span class="o">}</span>
+
+            <span class="nd">@Override</span>
+            <span class="kd">public</span> <span class="kt">void</span> <span class="nf">changePassword</span><span class="o">(</span><span class="nc">String</span> <span class="n">s</span><span class="o">,</span> <span class="nc">String</span> <span class="n">s1</span><span class="o">)</span> <span class="o">{</span>
+                <span class="k">this</span><span class="o">.</span><span class="na">inMemoryUserDetailsManager</span><span class="o">.</span><span class="na">changePassword</span><span class="o">(</span><span class="n">s</span><span class="o">,</span> <span class="n">s1</span><span class="o">);</span>
+            <span class="o">}</span>
+
+            <span class="nd">@Override</span>
+            <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">userExists</span><span class="o">(</span><span class="nc">String</span> <span class="n">s</span><span class="o">)</span> <span class="o">{</span>
+                <span class="k">return</span> <span class="k">this</span><span class="o">.</span><span class="na">inMemoryUserDetailsManager</span><span class="o">.</span><span class="na">userExists</span><span class="o">(</span><span class="n">s</span><span class="o">);</span>
+            <span class="o">}</span>
+
+            <span class="nd">@Override</span>
+            <span class="kd">public</span> <span class="nc">UserDetails</span> <span class="nf">loadUserByUsername</span><span class="o">(</span><span class="nc">String</span> <span class="n">s</span><span class="o">)</span> <span class="kd">throws</span> <span class="nc">UsernameNotFoundException</span> <span class="o">{</span>
+                <span class="k">return</span> <span class="k">new</span> <span class="nf">CustomUserDetails</span><span class="o">(</span><span class="n">testUser</span><span class="o">());</span>
+            <span class="o">}</span>
+        <span class="o">};</span>
+    <span class="o">}</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<p>Test class now looks as following:</p>
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nd">@SpringBootTest</span><span class="o">(</span>
+        <span class="n">classes</span> <span class="o">=</span> <span class="nc">SpringSecurityForUserControllerImplTestConfig</span><span class="o">.</span><span class="na">class</span>
+<span class="o">)</span>
+<span class="nd">@AutoConfigureMockMvc</span>
+<span class="kd">class</span> <span class="nc">UserControllerImplTest</span> <span class="o">{</span>
+
+    <span class="nd">@Autowired</span>
+    <span class="kd">private</span> <span class="nc">MockMvc</span> <span class="n">mockMvc</span><span class="o">;</span>
+
+    <span class="nd">@MockBean</span>
+    <span class="kd">private</span> <span class="nc">ImageDTOService</span> <span class="n">imageDTOService</span><span class="o">;</span>
+
+    <span class="nd">@Autowired</span>
+    <span class="nc">UserDTO</span> <span class="n">testUser</span><span class="o">;</span>
+
+    <span class="nd">@Test</span>
+    <span class="nd">@WithUserDetails</span><span class="o">(</span><span class="s">"username"</span><span class="o">)</span>
+    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">whenGetUserImages_andUserIsAuthorized_thenReturnListOfImages</span><span class="o">()</span> <span class="kd">throws</span> <span class="nc">Exception</span> <span class="o">{</span>
+
+        <span class="nc">List</span><span class="o">&lt;</span><span class="nc">ImageDTO</span><span class="o">&gt;</span> <span class="n">images</span> <span class="o">=</span> <span class="n">getSampleImages</span><span class="o">();</span>
+        <span class="n">images</span><span class="o">.</span><span class="na">forEach</span><span class="o">(</span><span class="n">imageDTO</span> <span class="o">-&gt;</span> <span class="n">imageDTO</span><span class="o">.</span><span class="na">setUploader</span><span class="o">(</span><span class="n">testUser</span><span class="o">));</span>
+
+        <span class="nc">Mockito</span><span class="o">.</span><span class="na">when</span><span class="o">(</span><span class="n">imageDTOService</span><span class="o">.</span><span class="na">findAllUploadedBy</span><span class="o">(</span><span class="n">testUser</span><span class="o">)).</span><span class="na">thenReturn</span><span class="o">(</span><span class="n">images</span><span class="o">);</span>
+
+        <span class="n">mockMvc</span><span class="o">.</span><span class="na">perform</span><span class="o">(</span><span class="n">get</span><span class="o">(</span><span class="s">"/user/images/"</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">andExpect</span><span class="o">(</span><span class="n">status</span><span class="o">().</span><span class="na">isOk</span><span class="o">())</span>
+                <span class="o">.</span><span class="na">andExpect</span><span class="o">(</span><span class="n">content</span><span class="o">().</span><span class="na">contentType</span><span class="o">(</span><span class="nc">MediaType</span><span class="o">.</span><span class="na">APPLICATION_JSON</span><span class="o">))</span>
+                <span class="o">.</span><span class="na">andExpect</span><span class="o">(</span><span class="n">content</span><span class="o">().</span><span class="na">json</span><span class="o">(</span>
+                        <span class="s">"[\n"</span> <span class="o">+</span>
+                                <span class="s">"  {\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"id\": 1,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"isActive\": true,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"isPublic\": true,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"title\": null,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"token\": \"token1\",\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"uploadTime\": \"2020-01-01T12:00:00\",\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"uploader\": \"username\"\n"</span> <span class="o">+</span>
+                                <span class="s">"  },\n"</span> <span class="o">+</span>
+                                <span class="s">"  {\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"id\": 2,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"isActive\": true,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"isPublic\": true,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"title\": null,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"token\": \"token2\",\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"uploadTime\": \"2020-01-01T12:00:00\",\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"uploader\": \"username\"\n"</span> <span class="o">+</span>
+                                <span class="s">"  },\n"</span> <span class="o">+</span>
+                                <span class="s">"  {\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"id\": 3,"</span> <span class="o">+</span>
+                                <span class="s">"    \n"</span> <span class="o">+</span>
+                                <span class="s">"    \"isActive\":true,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"isPublic\": true,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"title\": null,\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"token\": \"token3\",\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"uploadTime\": \"2020-01-01T12:00:00\",\n"</span> <span class="o">+</span>
+                                <span class="s">"    \"uploader\": \"username\""</span> <span class="o">+</span>
+                                <span class="s">"  }\n"</span> <span class="o">+</span>
+                                <span class="s">"]"</span>
+                <span class="o">));</span>
+    <span class="o">}</span>
+</code></pre></div></div>
+
+<p>And it passes the test at last! 🎉🥰</p>
+
+<h2 id="links">Links</h2>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[0]: https://golb.hplar.ch/2019/05/stateless.html
+[1]: https://stackoverflow.com/questions/46615504/springboottest-mock-authentication-principal-with-a-custom-user-does-not-work
+[2]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithMockUser.html
+[3]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/core/annotation/AuthenticationPrincipal.html
+[4]: https://stackoverflow.com/a/46631015/6158307
+[5]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/authentication/ProviderNotFoundException.html
+[6]: https://stackoverflow.com/a/43920932/6158307
+[7]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithUserDetails.html
+</code></pre></div></div>
+
+
+  </article>
+
+	<p class="feed-recomendation">
+		💞 Did you like the post? Add my blog to your RSS feed! <a href="/feed/">[click]</a> 💞
+	</p>
+
+  <div id="disqus_thread"></div>
+<script type="text/javascript">
+    /* * * CONFIGURATION VARIABLES * * */
+    var disqus_shortname = '';
+    var disqus_config = function () {
+        this.page.identifier = "/blog/mock-authentication-with-custom-userdetails/";
+    };
+    
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a></noscript>
+
+
+
+
+</div>
+
+  </article>
+
+</div>
+
+            </main>
+          </div>
+        </div>
+
+        <div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <footer>
+      Thx!
+    </footer>
+  </div>
+</div>
+
+
+      </div>
+    </body>
+</html>

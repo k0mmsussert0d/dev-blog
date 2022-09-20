@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Fix JetBrains IDEA IntelliJ not working on bspwm (gray window issue) | max dev blog & other stuff</title>
+
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="/css/bootstrap-3.3.6/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+
+    <link rel="shortcut icon" href="/images/favicon.jpg">
+
+    <link rel="alternate" type="application/atom+xml" title="Atom Feed" href="/feed/"> 
+
+</head>
+
+
+    <body>
+      <div class="container">
+
+        <header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"maksymilian"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"babarowski"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"k0mmsussert0d"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://github.com/k0mmsussert0d" target="_blank">https://github.com/<span class="reserved">%s\n</span></span></a>", github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>, name, surname);
+    </p>
+  </div>
+</header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
+
+<div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="menu">
+      <ul>
+          <li><a href="/">home</a></li>
+          <li><a href="/blog/">archive</a></li>
+          <li><a href="/about/">about</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2">
+            <main>
+            <div class="post">
+
+  <header class="post-header">
+    <h1>Fix JetBrains IDEA IntelliJ not working on bspwm (gray window issue)</h1>
+  </header>
+
+  <article class="post-content">
+  <div class="post">
+
+  <header class="post-header">
+    <p class="meta">
+        Jul 20, 2021
+        
+        
+        •
+        <span><a href="/category/#linux" class="reserved">linux</a>,</span><span><a href="/category/#ricing" class="reserved">ricing</a>,</span><span><a href="/category/#java" class="reserved">java</a></span>
+    </p>
+  </header>
+
+  <article class="post-content">
+  <p>An easily reproducible issue I’ve recently been running into is <strong>JetBrains IDEs not being displayed properly in <a href="https://github.com/baskerville/bspwm">bspwm[0]</a> environment</strong>. Instead of IDE graphical interface, only a gray solid window is being shown.</p>
+
+<p>There’s nothing innovatory about this fix, however it seems like it has never been mentioned in this particular context, meaning <strong>running IntelliJ on bspwm and xorg</strong>.</p>
+
+<!--break-->
+
+<p>This issue has been described in <a href="https://wiki.archlinux.org/title/Java#Gray_window,_applications_not_resizing_with_WM,_menus_immediately_closing">Troubleshooting section of Java article on ArchLinux wiki[1]</a>, although it doesn’t mention the fix method for bspwm.</p>
+
+<p>What needs to be done is <strong>to export <code class="language-plaintext highlighter-rouge">_JAVA_AWT_WM_NONREPARENTING=1</code></strong>. Just like in the solution for Sway desktop environment.</p>
+
+<p>The easiest way to achieve this in xorg environment is to add this line in <code class="language-plaintext highlighter-rouge">~/.xinitrc</code>:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>export _JAVA_AWT_WM_NONREPARENTING=1
+</code></pre></div></div>
+
+<h2 id="links">Links</h2>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[0]: https://github.com/baskerville/bspwm
+[1]: https://wiki.archlinux.org/title/Java#Gray_window,_applications_not_resizing_with_WM,_menus_immediately_closing
+</code></pre></div></div>
+
+
+  </article>
+
+	<p class="feed-recomendation">
+		💞 Did you like the post? Add my blog to your RSS feed! <a href="/feed/">[click]</a> 💞
+	</p>
+
+  <div id="disqus_thread"></div>
+<script type="text/javascript">
+    /* * * CONFIGURATION VARIABLES * * */
+    var disqus_shortname = '';
+    var disqus_config = function () {
+        this.page.identifier = "/blog/bspwm-intellij-fix/";
+    };
+    
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a></noscript>
+
+
+
+
+</div>
+
+  </article>
+
+</div>
+
+            </main>
+          </div>
+        </div>
+
+        <div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <footer>
+      Thx!
+    </footer>
+  </div>
+</div>
+
+
+      </div>
+    </body>
+</html>

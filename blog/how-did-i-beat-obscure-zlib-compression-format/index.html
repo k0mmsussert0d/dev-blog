@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>How I cracked obscure zlib compression format of old MySQL blobs | max dev blog & other stuff</title>
+
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="/css/bootstrap-3.3.6/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+
+    <link rel="shortcut icon" href="/images/favicon.jpg">
+
+    <link rel="alternate" type="application/atom+xml" title="Atom Feed" href="/feed/"> 
+
+</head>
+
+
+    <body>
+      <div class="container">
+
+        <header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"maksymilian"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"babarowski"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"k0mmsussert0d"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://github.com/k0mmsussert0d" target="_blank">https://github.com/<span class="reserved">%s\n</span></span></a>", github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>, name, surname);
+    </p>
+  </div>
+</header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
+
+<div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="menu">
+      <ul>
+          <li><a href="/">home</a></li>
+          <li><a href="/blog/">archive</a></li>
+          <li><a href="/about/">about</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2">
+            <main>
+            <div class="post">
+
+  <header class="post-header">
+    <h1>How I cracked obscure zlib compression format of old MySQL blobs</h1>
+  </header>
+
+  <article class="post-content">
+  <div class="post">
+
+  <header class="post-header">
+    <p class="meta">
+        Oct 3, 2020
+        
+        
+        •
+        <span><a href="/category/#piracy" class="reserved">piracy</a>,</span><span><a href="/category/#puzzle" class="reserved">puzzle</a>,</span><span><a href="/category/#random" class="reserved">random</a></span>
+    </p>
+  </header>
+
+  <article class="post-content">
+  <p>Looking around the web for old <a href="https://en.wikipedia.org/wiki/Nuke_(warez)#Pre_database">pre databases[0]</a> I stumbled upon <a href="http://rescene.wikidot.com/scene-databases">this nice collection of preDBs dumps[1]</a>. <a href="http://rescene.wikidot.com/dump-islander">The one[2]</a> that caught my interest was shared by the user called Islander to celebrate him <code class="language-plaintext highlighter-rouge">quitting this world and starting a real life</code>. Shared in October 2014, it was built across years 2005-2011, supposedly being the biggest database of nfos, sfvs and other metadata at 2011.</p>
+
+<p>7.7GB RAR archive includes 452MB SQL dump of pre entries and over 5.3GB SQL dump of nfo files. After importing these dumps into MySQL database server (8.0.21 hosted in Docker) I discovered that something is off with <code class="language-plaintext highlighter-rouge">nfo</code> schema.</p>
+
+<!--break-->
+
+<p>To briefly give an idea on how the table looks like:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&gt; SELECT COLUMN_NAME, ORDINAL_POSITION, COLUMNT_TYPE FROM information_schema.columns where TABLE_NAME='nfo'
+
+&lt;
+COLUMN_NAME	ORDINAL_POSITION    COLUMN_TYPE
+id              1	            int unsigned
+rel_name        2                   varchar
+rel_nfo         3                   longblog
+rel_filename    4                   varchar	
+</code></pre></div></div>
+
+<p>Cool. Let’s snatch one of those blobs:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&gt; SELECT CONVERT(rel_nfo using ascii) from nfo where id=85443
+
+&lt; "$x????v??????M???b?J????&amp;n?M?R????a$?bM?*E??...
+</code></pre></div></div>
+
+<p>Huh? Turns out blobs are compressed. Since it’s MySQL, my first guess is of course <strong>zlib</strong>.</p>
+
+<p>Trying to decompress the file using Python <code class="language-plaintext highlighter-rouge">zlib</code> module:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&gt;&gt;&gt; import zlib
+&gt;&gt;&gt; with open('./nfo-rel_nfo.bin', 'rb') as file:
+...     zlib.decompress(file)
+... 
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 2, in &lt;module&gt;
+zlib.error: Error -3 while decompressing data: incorrect header check
+</code></pre></div></div>
+
+<p>No luck. Maybe it’s not zlib after all? I decide to verify that using <a href="https://github.com/ReFirmLabs/binwalk">binwalk[3]</a>, a tool for heuristic binary-level analysis.</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ binwalk nfo-rel_nfo.bin
+
+DECIMAL       HEXADECIMAL     DESCRIPTION
+--------------------------------------------------------------------------------
+4             0x4             Zlib compressed data, default compression
+</code></pre></div></div>
+
+<p>It detects zlib signature at <code class="language-plaintext highlighter-rouge">0x04</code> byte. How does it look like?</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ xxd nfo-rel_nfo.bin | head -1
+00000000: 2224 0000 789c a599 dd76 dbb8 1180 eff5  "$..x....v......
+</code></pre></div></div>
+
+<p>Perhaps it’s worth take a look at other file?</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>xxd nfo-rel_nfo-0.bin | head -1
+00000000: 314e 0000 789c ed5c dd72 dbc6 92be dfaa  1N..x..\.r......
+</code></pre></div></div>
+
+<p>After confirming it with numerous other files, it seems all of them share the same <code class="language-plaintext highlighter-rouge">0x2, 0x3</code>, <code class="language-plaintext highlighter-rouge">0x4</code> and <code class="language-plaintext highlighter-rouge">0x5</code> bytes. What does it mean in terms of zlib compression?</p>
+
+<p>My first steps lead me to <a href="https://tools.ietf.org/html/rfc1950">RFC 1950[4]</a> stating, that:</p>
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">0x0</code> defines CMF (Compression Method and flags)</li>
+  <li><code class="language-plaintext highlighter-rouge">0x1</code> defines FLG (FLaGs)</li>
+  <li>from <code class="language-plaintext highlighter-rouge">0x2</code> to <code class="language-plaintext highlighter-rouge">0x5</code> represent DICT if flag FDICT was set on 5th bit of <code class="language-plaintext highlighter-rouge">0x1</code></li>
+  <li>everything beyond that point is compressed data</li>
+  <li>files ends with Adler-32 checksum</li>
+</ul>
+
+<p>Considering that all the files share the same bytes from 3rd to 6th, that are supposed to be either part of compression stream or FDICT while 1st and 2nd one are always different, it doesn’t make much of a sense.</p>
+
+<p>After hours of searching, I found <a href="https://stackoverflow.com/q/59494980/6158307">this stackoverflow question[5]</a> asked by someone struggling with a similar problem. Upgrading zlib in some networking library broke the mutual compatibility between resources using old and new version of that library.</p>
+
+<p>They noticed that old zlib library (possibly 1.1.3) returns:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>00000000: 1f00 0000 789c 0bc9 c82c 5600 a244 8592  ....x....,V..D..
+</code></pre></div></div>
+
+<p>While 1.2.11 returns:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>00000000: 78da 0bc9 c82c 5600 a244 8592 d4e2 1285  x....,V..D......
+</code></pre></div></div>
+
+<p>Supposing the shared part starting with <code class="language-plaintext highlighter-rouge">0x0bc9 c82c 5600 a244...</code> is compressed data stream, <code class="language-plaintext highlighter-rouge">0x789c</code> are flags for 1.1.3 zlib compression and <code class="language-plaintext highlighter-rouge">0x78da</code> are flags set by zlib 1.2.11. However, old zlib adds a little extra to the output - <code class="language-plaintext highlighter-rouge">0x1f000000</code>. What’s the meaning behind that?</p>
+
+<p>That person eventually found the answer on the same day. Citing:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Turns out the older zlib - or possibly the older networking library - had a 32-bit "uncompressed output" size prepended to its compressed output.
+</code></pre></div></div>
+
+<p>Let’s checkout that theory! Coincidentally, yet luckily I’m in possession of uncompressed version of this nfo file acquired somewhere else.</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ ls -l 00-va_-_big_dance_party_vol_1-\(185_312\)-1994-zzzz.nfo 
+-rw-r--r-- 1 max max 9250 Mar  9 01:02 '00-va_-_big_dance_party_vol_1-(185_312)-1994-zzzz.nfo'
+</code></pre></div></div>
+
+<p>9250 bytes. Going back to that strange signature, first 32 bits are: <code class="language-plaintext highlighter-rouge">0x22240000</code>, <code class="language-plaintext highlighter-rouge">572784640</code> converted to decimal. Not even close to <code class="language-plaintext highlighter-rouge">9250</code>. It took me a few moments to realize my mistake. Of course it needs to be read in little-endian order! After swapping - <code class="language-plaintext highlighter-rouge">0x00002422</code> is <code class="language-plaintext highlighter-rouge">9250</code>! Gotcha!!</p>
+
+<p>Let’s try removing first 32 bits of the file to fix flags offset and see what happens:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&gt;&gt;&gt; with open('./nfo-rel_nfo.bin', 'rb') as input, open('./out.nfo', 'wb') as output:
+...     x = zlib.decompress(input.read())
+...     #  no more errors yay! :D
+...     output.write(x)
+... 
+9250
+</code></pre></div></div>
+
+<p>It seems it worked. Let’s check out the output:
+<img src="/images/2020/zzzz.png" alt="Screenshot showing decompressed file" /></p>
+
+<p>Victory! Now, in order to extract all the nfos from the database, I wrote this nice little Python script:</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">import</span> <span class="nn">zlib</span>
+
+<span class="kn">import</span> <span class="nn">mysql.connector</span>
+<span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
+
+
+<span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">'__main__'</span><span class="p">:</span>
+
+    <span class="n">dump_path</span> <span class="o">=</span> <span class="s">'/home/max/Projects/pre_archive/islander'</span>
+
+    <span class="n">cnx</span> <span class="o">=</span> <span class="n">mysql</span><span class="p">.</span><span class="n">connector</span><span class="p">.</span><span class="n">connect</span><span class="p">(</span><span class="n">user</span><span class="o">=</span><span class="s">'root'</span><span class="p">,</span> <span class="n">password</span><span class="o">=</span><span class="s">'root'</span><span class="p">,</span>
+                                  <span class="n">host</span><span class="o">=</span><span class="s">'localhost'</span><span class="p">,</span> <span class="n">database</span><span class="o">=</span><span class="s">'islander'</span><span class="p">)</span>
+    <span class="n">cursor</span> <span class="o">=</span> <span class="n">cnx</span><span class="p">.</span><span class="n">cursor</span><span class="p">()</span>
+
+    <span class="n">data_query</span> <span class="o">=</span> <span class="s">'SELECT rel_name, rel_filename, rel_nfo FROM nfo;'</span>
+
+    <span class="n">count_query</span> <span class="o">=</span> <span class="s">'SELECT COUNT(*) FROM nfo;'</span>
+    <span class="n">cursor</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span><span class="n">count_query</span><span class="p">)</span>
+    <span class="n">nfo_count</span> <span class="o">=</span> <span class="n">cursor</span><span class="p">.</span><span class="n">fetchone</span><span class="p">()</span>
+
+    <span class="n">cursor</span><span class="p">.</span><span class="n">execute</span><span class="p">(</span><span class="n">data_query</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="n">tqdm</span><span class="p">(</span><span class="n">total</span><span class="o">=</span><span class="n">nfo_count</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">as</span> <span class="n">pbar</span><span class="p">:</span>
+        <span class="k">for</span> <span class="p">(</span><span class="n">rel_name</span><span class="p">,</span> <span class="n">rel_filename</span><span class="p">,</span> <span class="n">rel_nfo</span><span class="p">)</span> <span class="ow">in</span> <span class="n">cursor</span><span class="p">:</span>
+            <span class="n">release_path</span> <span class="o">=</span> <span class="sa">f</span><span class="s">'</span><span class="si">{</span><span class="n">dump_path</span><span class="si">}</span><span class="s">/</span><span class="si">{</span><span class="n">rel_name</span><span class="si">}</span><span class="s">'</span>
+            <span class="n">filename</span> <span class="o">=</span> <span class="sa">f</span><span class="s">'</span><span class="si">{</span><span class="n">rel_name</span><span class="si">}</span><span class="s">.nfo'</span><span class="p">.</span><span class="n">replace</span><span class="p">(</span><span class="s">'/'</span><span class="p">,</span> <span class="s">''</span><span class="p">)</span>
+            <span class="n">Path</span><span class="p">(</span><span class="n">release_path</span><span class="p">).</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s">'</span><span class="si">{</span><span class="n">release_path</span><span class="si">}</span><span class="s">/</span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s">'</span><span class="p">,</span> <span class="s">'wb'</span><span class="p">)</span> <span class="k">as</span> <span class="n">nfo_file</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">d</span> <span class="o">=</span> <span class="n">zlib</span><span class="p">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">rel_nfo</span><span class="p">[</span><span class="mi">4</span><span class="p">:])</span>  <span class="c1"># trim 32 header and decompress
+</span>                    <span class="n">nfo_file</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>
+                    <span class="n">nfo_file</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
+                <span class="k">except</span> <span class="n">zlib</span><span class="p">.</span><span class="n">error</span><span class="p">:</span>
+                    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">'Error decompressing: </span><span class="si">{</span><span class="n">rel_name</span><span class="si">}</span><span class="s">'</span><span class="p">)</span>
+
+            <span class="n">pbar</span><span class="p">.</span><span class="n">update</span><span class="p">()</span>
+
+    <span class="n">cursor</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="n">cnx</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<p>Crucial part is the line 32, where binary data is being read by <code class="language-plaintext highlighter-rouge">zlib.decompress</code> omitting first 4 bytes. After adding some precautious steps to the script (some filenames has forbidden characters, plus ext4 doesn’t handle 72,923 files in a single directory well) I was able to decompress all the blobs in this database 🎉🥰</p>
+<h2 id="links">Links</h2>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[0]: https://en.wikipedia.org/wiki/Nuke_(warez)#Pre_database
+[1]: http://rescene.wikidot.com/scene-databases
+[2]: http://rescene.wikidot.com/dump-islander
+[3]: https://github.com/ReFirmLabs/binwalk
+[4]: https://tools.ietf.org/html/rfc1950
+[5]: https://stackoverflow.com/q/59494980/6158307
+</code></pre></div></div>
+
+
+  </article>
+
+	<p class="feed-recomendation">
+		💞 Did you like the post? Add my blog to your RSS feed! <a href="/feed/">[click]</a> 💞
+	</p>
+
+  <div id="disqus_thread"></div>
+<script type="text/javascript">
+    /* * * CONFIGURATION VARIABLES * * */
+    var disqus_shortname = '';
+    var disqus_config = function () {
+        this.page.identifier = "/blog/how-did-i-beat-obscure-zlib-compression-format/";
+    };
+    
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a></noscript>
+
+
+
+
+</div>
+
+  </article>
+
+</div>
+
+            </main>
+          </div>
+        </div>
+
+        <div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <footer>
+      Thx!
+    </footer>
+  </div>
+</div>
+
+
+      </div>
+    </body>
+</html>

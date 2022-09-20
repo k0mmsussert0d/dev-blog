@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Compiling Python <3.5.3 in 2022 | max dev blog & other stuff</title>
+
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="/css/bootstrap-3.3.6/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+
+    <link rel="shortcut icon" href="/images/favicon.jpg">
+
+    <link rel="alternate" type="application/atom+xml" title="Atom Feed" href="/feed/"> 
+
+</head>
+
+
+    <body>
+      <div class="container">
+
+        <header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"maksymilian"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"babarowski"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"k0mmsussert0d"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://github.com/k0mmsussert0d" target="_blank">https://github.com/<span class="reserved">%s\n</span></span></a>", github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>, name, surname);
+    </p>
+  </div>
+</header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
+
+<div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="menu">
+      <ul>
+          <li><a href="/">home</a></li>
+          <li><a href="/blog/">archive</a></li>
+          <li><a href="/about/">about</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2">
+            <main>
+            <div class="post">
+
+  <header class="post-header">
+    <h1>Compiling Python <3.5.3 in 2022</h1>
+  </header>
+
+  <article class="post-content">
+  <div class="post">
+
+  <header class="post-header">
+    <p class="meta">
+        Jan 15, 2022
+        
+        
+        •
+        <span><a href="/category/#linux" class="reserved">linux</a>,</span><span><a href="/category/#python" class="reserved">python</a></span>
+    </p>
+  </header>
+
+  <article class="post-content">
+  <p>Despite Python 3.6 reaching end-of-life just 3 weeks ago<a href="https://devguide.python.org/devcycle/#end-of-life-branches">[0]</a>, the amount of projects depending on older versions of Python 3 is exorbitant. Whilst working on a part of my media library workflow I found myself in need of using an old stalled project based on Python 3.4. Sadly, the code does not execute properly in newer runtimes and no one has ever undertook the task of refactoring it. Therefore, users are forced to run it with 3.4 version interpreter.</p>
+
+<!--break-->
+
+<p><strong>tldr; use openssl 1.0 and gcc 10</strong></p>
+
+<h2 id="short-introduction-to-pyenv">Short introduction to <em>pyenv</em></h2>
+
+<p>Before getting right into the the crux of the matter, I’d like to interject for a moment in order to familiarize dear reader with Python runtime management tool called <em>pyenv</em>. This entry is not closely connected with it, however chances of anyone still willing to manually juggle Python runtimes after learning about <em>pyenv</em> are near to none. It’s just so convenient to use.</p>
+
+<p>My case isn’t one of its own. Python is notorious for providing poor interoperability between its different versions and the tool I’ve been using for years to mitigate caused inconveniences is <a href="https://github.com/pyenv/pyenv">pyenv[1]</a>. Basically it allows you to install multiple version of Python runtime and switch between them with ease. Let’s say you want to use version <code class="language-plaintext highlighter-rouge">3.7.12</code> – run <code class="language-plaintext highlighter-rouge">pyenv install 3.7.12</code>. As Python offers source code tarballs as the only official way of distribution, <em>pyenv</em> downloads the archive, builds the version of your choice and copies the output binaries to its own runtime directory. Then, switching to the specific version is as simple as executing <code class="language-plaintext highlighter-rouge">pyenv global 3.7.12</code>. From now on, <code class="language-plaintext highlighter-rouge">python</code> command should be resolved with <code class="language-plaintext highlighter-rouge">3.7.12</code> binary.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ python --version
+Python 3.7.12
+</code></pre></div></div>
+
+<p><em>pyenv</em> is very powerful utility on its own, and paired with extension called <code class="language-plaintext highlighter-rouge">pyevn-virtualenv</code> has served me as a manager of runtimes for multiple Python projects.</p>
+
+<p>This time wasn’t supposed to be different and I was very surprised when <code class="language-plaintext highlighter-rouge">pyenv install 3.4.10</code> greeted me with <code class="language-plaintext highlighter-rouge">ERROR: The Python ssl extension was not compiled. Missing the OpenSSL lib</code>.</p>
+
+<h2 id="openssl-10">OpenSSL 1.0</h2>
+<p>As per <a href="https://github.com/pyenv/pyenv/wiki/Common-build-problems#2-your-openssl-version-is-incompatible-with-the-python-version-youre-trying-to-install">pyenv docs[2]</a>, old Python versions (for CPython, &lt;3.5.3 and &lt;2.7.13) require OpenSSL 1.0, while most of the newer systems ship with 1.1.x version by default. However, most also provide 1.0.2 version available as a separate package to cover incompatibility issues like this. For my distribution, which is Arch Linux, the package is called <code class="language-plaintext highlighter-rouge">openssl-1.0</code>. Debian stretch and Ubuntu bionic users might use <code class="language-plaintext highlighter-rouge">libssl1.0-dev</code>.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ pacman -S openssl-1.0
+</code></pre></div></div>
+
+<p>There is no need to uninstall package providing new version of OpenSSL. The compiler just needs to be told where to look for the headers. Run <code class="language-plaintext highlighter-rouge">pyenv install</code> again with the following compilation flags:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ CFLAGS="-I/usr/include/openssl-1.0" LDFLAGS="-L/usr/lib/openssl-1.0" CPPFLAGS="-I/usr/include/openssl-1.0" pyenv install 3.4.10
+</code></pre></div></div>
+
+<p>Verify the paths of OpenSSL 1.0 library beforehand. The command above includes the ones applicable for default Arch Linux setup. They might look different for other distributions.</p>
+
+<h2 id="segfault-and-other-compilation-errors">SEGFAULT and other compilation errors</h2>
+<p>Compiling older version of Python on Arch Linux and other bleeding edge distros might be interrupted by unexpected compilation error. In my case it was classic segmentation fault. The key is to use older version of gcc. For <em>3.4.10</em> version, it’s enough to go back to gcc 10, still available as a regular package in Arch Linux.</p>
+
+<p>Install it:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ pacman -S gcc10
+</code></pre></div></div>
+
+<p>And add another flag to <code class="language-plaintext highlighter-rouge">pyenv install</code> call – <code class="language-plaintext highlighter-rouge">CC=gcc-10</code>:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ CC=gcc-10 CFLAGS="-I/usr/include/openssl-1.0" LDFLAGS="-L/usr/lib/openssl-1.0" CPPFLAGS="-I/usr/include/openssl-1.0" pyenv install 3.4.10
+</code></pre></div></div>
+
+<p>Compilation should now succeed.</p>
+
+<h2 id="summary">Summary</h2>
+<p>To wrap everything up – compiling older version of Python on modern systems usually require two tweaks:</p>
+<ul>
+  <li>providing OpenSSL 1.0 library as an alternative to any other version installed on the system</li>
+  <li>using GCC 10 instead of recently released GCC 11</li>
+</ul>
+
+<p>In Arch Linux it all narrows down to just two commands:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pacman -S openssl-1.0 gcc10
+CC=gcc-10 CFLAGS="-I/usr/include/openssl-1.0" LDFLAGS="-L/usr/lib/openssl-1.0" CPPFLAGS="-I/usr/include/openssl-1.0" pyenv install 3.4.10
+</code></pre></div></div>
+
+<p>Happy coding, scripting or whatever you need old Python for. Don’t forget to consider refactoring the code to run correctly in newer runtime, as OpenSSL 1.0 embedded in legacy Python executable is EOL and any internet-facing applications should not rely on it anymore.</p>
+
+<h2 id="links">Links</h2>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[0]: https://devguide.python.org/devcycle/#end-of-life-branches
+[1]: https://github.com/pyenv/pyenv
+[2]: https://github.com/pyenv/pyenv/wiki/Common-build-problems#2-your-openssl-version-is-incompatible-with-the-python-version-youre-trying-to-install
+</code></pre></div></div>
+
+<p>~~~</p>
+
+  </article>
+
+	<p class="feed-recomendation">
+		💞 Did you like the post? Add my blog to your RSS feed! <a href="/feed/">[click]</a> 💞
+	</p>
+
+  <div id="disqus_thread"></div>
+<script type="text/javascript">
+    /* * * CONFIGURATION VARIABLES * * */
+    var disqus_shortname = '';
+    var disqus_config = function () {
+        this.page.identifier = "/blog/compiling-python34-in-2022/";
+    };
+    
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a></noscript>
+
+
+
+
+</div>
+
+  </article>
+
+</div>
+
+            </main>
+          </div>
+        </div>
+
+        <div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <footer>
+      Thx!
+    </footer>
+  </div>
+</div>
+
+
+      </div>
+    </body>
+</html>

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>How to restrict network access of LXC container | max dev blog & other stuff</title>
+
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="/css/bootstrap-3.3.6/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+
+    <link rel="shortcut icon" href="/images/favicon.jpg">
+
+    <link rel="alternate" type="application/atom+xml" title="Atom Feed" href="/feed/"> 
+
+</head>
+
+
+    <body>
+      <div class="container">
+
+        <header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"maksymilian"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"babarowski"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"k0mmsussert0d"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://github.com/k0mmsussert0d" target="_blank">https://github.com/<span class="reserved">%s\n</span></span></a>", github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>, name, surname);
+    </p>
+  </div>
+</header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
+
+<div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="menu">
+      <ul>
+          <li><a href="/">home</a></li>
+          <li><a href="/blog/">archive</a></li>
+          <li><a href="/about/">about</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2">
+            <main>
+            <div class="post">
+
+  <header class="post-header">
+    <h1>How to restrict network access of LXC container</h1>
+  </header>
+
+  <article class="post-content">
+  <div class="post">
+
+  <header class="post-header">
+    <p class="meta">
+        Jan 28, 2022
+        
+        
+        •
+        <span><a href="/category/#linux" class="reserved">linux</a>,</span><span><a href="/category/#itsec" class="reserved">itsec</a>,</span><span><a href="/category/#tutorial" class="reserved">tutorial</a></span>
+    </p>
+  </header>
+
+  <article class="post-content">
+  <p>So let’s say you have to run that sketchy or untrusted executable/project/binary/whatever and you want to do in a safe manner. Wide range of applicable solutions based on virtualization and contenerization technologies allow secure examination of suspicious software in a sandboxed environment.</p>
+
+<p>If you’re a Linux user, you’d probably point your attention to <a href="https://linuxcontainers.org/"><strong>LXC</strong>[0]</a>. Just a few commands to bring up shiny new environment based on a distro selected from wide variety of available options, running on the host kernel with no excessive emulation overhead.</p>
+
+<p>That alone provides decent separation from whatever you don’t want an object of research to touch in your workstation. <strong>But what about connectivity?</strong></p>
+
+<!--break-->
+
+<p>Permitting an unknown actor unrestricted access to the Internet or LAN poses serious threat. At the same time, the container is going to need it to some extent, for installing packages or remote access from host. Wouldn’t it be convenient to switch the network access restrictions of the container on and off at any time?</p>
+
+<h2 id="use-a-nat-bridge">Use a NAT bridge</h2>
+
+<p>Fairly simple way to achieve it is to use <strong>iptables</strong> in conjunction with <strong>lxc-net</strong>. Using <em>lxc-net</em> assumes running the container behind a NAT bridge. If you want to bridge the container to LAN, the tool of your choice might provide a built-in mechanism to achieve similar effect<a href="https://wiki.archlinux.org/title/Network_bridge">[1]</a>. In my opinion, having the container behind local NAT provides higher level of resilience and control. In case of having to expose the container to wider publicity, you can always redirect traffic from host to lxc.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 2221 -j DNAT --to-destination 10.0.3.100:22
+</code></pre></div></div>
+
+<p>The example rule above forwards TCP traffic origination on port <code class="language-plaintext highlighter-rouge">2221</code> of <code class="language-plaintext highlighter-rouge">eth0</code> interface to lxc SSH server running on <code class="language-plaintext highlighter-rouge">10.0.3.100:22</code><a href="https://wiki.archlinux.org/title/Linux_Containers#Example_iptables_rule">[2]</a>.</p>
+
+<p>Arch Linux Wiki <a href="https://wiki.archlinux.org/title/Linux_Containers#Example_iptables_rule">article[2]</a> I took this rule from serves as a pretty good introduction to using <em>lxc-net</em> and lxc as whole. There’s no point in me repeating most of its content, so give it a read if you’re not familiar with lxc. At the end of a day, you should have a lxc container running behind NAT managed by <em>lxc-net</em>.</p>
+
+<h2 id="firewall-setup">Firewall setup</h2>
+
+<p>Assuming that you have used default configuration, CIDR of your lxc subnet is <code class="language-plaintext highlighter-rouge">10.0.3.0/24</code>. Running <code class="language-plaintext highlighter-rouge">lxc-ls -f</code> returns a list of containers similar to this:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>NAME    STATE   AUTOSTART GROUPS IPV4       IPV6 UNPRIVILEGED
+lxc0    RUNNING 0         -      10.0.3.250 -    false
+lxc1    STOPPED 0         -      -          -    false
+</code></pre></div></div>
+
+<p>We’ll be imposing restrictions on <code class="language-plaintext highlighter-rouge">lxc0</code> container. Take note of its IP address – <code class="language-plaintext highlighter-rouge">10.0.3.250</code> in my case.</p>
+
+<p>You should also know name of the interface managed by <em>lxc-net</em>. It’s mentioned in the config file <code class="language-plaintext highlighter-rouge">/etc/lxc/default.conf</code> by <code class="language-plaintext highlighter-rouge">lxc.net.0.link</code> key and by default it’s <code class="language-plaintext highlighter-rouge">lxcbr0</code>.</p>
+
+<p>If you run <code class="language-plaintext highlighter-rouge">iptables -L FORWARD -v</code> you should see two rules related to it at top of the chain.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     all  --  any    lxcbr0  anywhere             anywhere
+    0     0 ACCEPT     all  --  lxcbr0 any     anywhere             anywhere
+</code></pre></div></div>
+
+<p>They allow all kinds of traffic on <code class="language-plaintext highlighter-rouge">lxcbr0</code> interface in any direction.</p>
+
+<p>We want to forbid ANY incoming and outgoing traffic from the container except for traffic between the container and host. The address of the host can be obtained from <code class="language-plaintext highlighter-rouge">/etc/default/lxc-net</code> file under <code class="language-plaintext highlighter-rouge">LXC_ADDR</code> key and its default value is <code class="language-plaintext highlighter-rouge">10.0.3.1</code>.</p>
+
+<p>Therefore, this rule should be applied on host <em>iptables</em>:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># iptables -I FORWARD 1 -i lxcbr0 ! -d 10.0.3.1 -j DROP
+</code></pre></div></div>
+
+<p>It can be explained in a following way:</p>
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">-I FORWARD 1</code> inserts the rule at index 1 of <code class="language-plaintext highlighter-rouge">FORWARD</code> chain</li>
+  <li><code class="language-plaintext highlighter-rouge">-i lxcbr0</code> applies the rule to traffic received on interface called <code class="language-plaintext highlighter-rouge">lxcbr0</code></li>
+  <li><code class="language-plaintext highlighter-rouge">! -d 10.0.3.1</code> applies the rule to traffic directed to any IP address, <strong>except</strong> for <code class="language-plaintext highlighter-rouge">10.0.3.1</code> which is host IP</li>
+  <li><code class="language-plaintext highlighter-rouge">-j DROP</code> blocks all the traffic matching criteria above</li>
+</ul>
+
+<p>Additionally, you might block inbound traffic:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># iptables -I FORWARD 2 -i lxcbr0 ! -s 10.0.3.1 -j DROP
+</code></pre></div></div>
+
+<p>In order to test the solution, try connecting to the container’s shell via SSH. It should work fine. Now try pinging any host inside or outside LAN. None of the packets should go through.</p>
+
+<p>Restriction can be lifted at any time with this command:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># iptables -D FORWARD 1
+</code></pre></div></div>
+
+<p>It removes the rule from chain FORWARD specified by the index. <strong>Note that you need to run it twice if you applied both inbound and outbound blocking rules.</strong></p>
+
+<h2 id="allowing-multiple-containers-to-communicate">Allowing multiple containers to communicate</h2>
+
+<p>If you want to run several containers in the same subnet and allow the traffic to occur between them, but not leak outside, you can modify the rule to drop anything except for packets sourced and addressed to <code class="language-plaintext highlighter-rouge">10.0.3.0/24</code> subnet.</p>
+
+<p>This turns the first rule into:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># iptables -I FORWARD 1 -i lxcbr0 ! -d 10.0.3.0/24 -j DROP
+</code></pre></div></div>
+
+<p>Equivalent modification of <code class="language-plaintext highlighter-rouge">-d</code> argument can be applied to the outbound rule.</p>
+
+<h2 id="links">Links</h2>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[0]: https://linuxcontainers.org/
+[1]: https://wiki.archlinux.org/title/Network_bridge
+[2]: https://wiki.archlinux.org/title/Linux_Containers#Example_iptables_rule
+</code></pre></div></div>
+
+
+  </article>
+
+	<p class="feed-recomendation">
+		💞 Did you like the post? Add my blog to your RSS feed! <a href="/feed/">[click]</a> 💞
+	</p>
+
+  <div id="disqus_thread"></div>
+<script type="text/javascript">
+    /* * * CONFIGURATION VARIABLES * * */
+    var disqus_shortname = '';
+    var disqus_config = function () {
+        this.page.identifier = "/blog/how-to-restrict-network-in-lxc/";
+    };
+    
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a></noscript>
+
+
+
+
+</div>
+
+  </article>
+
+</div>
+
+            </main>
+          </div>
+        </div>
+
+        <div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <footer>
+      Thx!
+    </footer>
+  </div>
+</div>
+
+
+      </div>
+    </body>
+</html>

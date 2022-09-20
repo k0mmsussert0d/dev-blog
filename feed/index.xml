@@ -1,0 +1,1119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>max dev blog &amp; other stuff</title>
+    <description></description>
+    <link>https://babarowski.com//</link>
+    <atom:link href="https://babarowski.com//feed.xml" rel="self" type="application/rss+xml" />
+    <pubDate>Tue, 20 Sep 2022 22:19:13 +0000</pubDate>
+    <lastBuildDate>Tue, 20 Sep 2022 22:19:13 +0000</lastBuildDate>
+    <generator>Jekyll v4.1.1</generator>
+    
+      <item>
+        <title>Proxmox cloud backup</title>
+        <description>&lt;p&gt;If you are running &lt;a href=&quot;https://www.proxmox.com/en/proxmox-ve&quot;&gt;Proxmox Virtual Environment [0]&lt;/a&gt; in your infra, chances are that you utilize the &lt;a href=&quot;https://pve.proxmox.com/wiki/Backup_and_Restore&quot;&gt;Backup and Restore functionality [1]&lt;/a&gt;. Like many other PVE features, its web GUI is devoid of a large number of controls for managing options described in the documentation.&lt;/p&gt;
+
+&lt;p&gt;Within this short entry I want to demonstrate setup I’ve came up with for &lt;strong&gt;synchronizing Proxmox VMs/CTs to Backblaze B2 cloud backup&lt;/strong&gt; using hook scripts feature.&lt;/p&gt;
+
+&lt;!--break--&gt;
+
+&lt;h2 id=&quot;prerequisites&quot;&gt;Prerequisites&lt;/h2&gt;
+
+&lt;p&gt;Before proceeding, you should be in control of a &lt;a href=&quot;https://www.backblaze.com/b2/cloud-storage.html&quot;&gt;Backblaze B2 account [2]&lt;/a&gt; with a configured bucket to upload dumps to. Alternatively, you should be fine using any other remote storage provided &lt;a href=&quot;https://rclone.org/#providers&quot;&gt;supported by rclone [3]&lt;/a&gt;. My choice of Backblaze is justified by the affordable pricing model they employ.&lt;/p&gt;
+
+&lt;p&gt;I’m also assuming that you have a configured backup job in PVE. Specifics don’t matter; the job can cover any number of machines, have whichever schedule and use any other options. A single backup job is tied to a single storage device for storing resulting dumps, so we can be sure all backups will be kept in the same location.&lt;/p&gt;
+
+&lt;h2 id=&quot;backup-job-hook-scripts&quot;&gt;Backup job hook scripts&lt;/h2&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://pve.proxmox.com/wiki/Backup_and_Restore#_hook_scripts&quot;&gt;Hook script [4]&lt;/a&gt;, in terms of PVE’s backups functionality, is an optional script set per job called at various phases of its execution. An example Perl script provided with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;pve-manager&lt;/code&gt; documentation enumerates the phases script might be called at:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;job-start
+job-end
+job-abort
+backup-start
+backup-end
+backup-abort
+log-end
+pre-stop
+pre-restart
+post-restart
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The phase is passed to the script as the parameter.&lt;/p&gt;
+
+&lt;h2 id=&quot;rclone&quot;&gt;rclone&lt;/h2&gt;
+
+&lt;p&gt;We’re on the right track with integrating custom processes into PVE backup jobs. Let’s focus on preparing the process itself before &lt;em&gt;hooking it up&lt;/em&gt; to the job.&lt;/p&gt;
+
+&lt;p&gt;Assuming that you’ve already created a Backblaze bucket, you should be in possession of API key and secret key.&lt;/p&gt;
+
+&lt;p&gt;Install &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rclone&lt;/code&gt; on the machine running PVE instance and run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rclone config&lt;/code&gt;. Use the interactive prompt to configure the access to the bucket. Try running commands like &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rclone ls &amp;lt;bucket-name&amp;gt;:&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rclone copy &amp;lt;sample-file&amp;gt; &amp;lt;bucket-name&amp;gt;:&lt;/code&gt; to verify if it works correctly. &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rclone&lt;/code&gt; should be capable of both reading and writing files.&lt;/p&gt;
+
+&lt;h2 id=&quot;preparing-the-sync-script&quot;&gt;Preparing the sync script&lt;/h2&gt;
+
+&lt;p&gt;The script should run only after the backup job is entirely finished. Make sure the job is configured in &lt;em&gt;Datacenter &amp;gt; Backup&lt;/em&gt; tab, then SSH into the server.&lt;/p&gt;
+
+&lt;p&gt;Create a new file in a directory convenient for you. Then, paste in the following content:&lt;/p&gt;
+
+&lt;div class=&quot;language-bash highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;c&quot;&gt;#!/bin/bash&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$1&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;job-end&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;then
+    &lt;/span&gt;rclone &lt;span class=&quot;nt&quot;&gt;--config&lt;/span&gt; /root/.config/rclone/rclone.conf &lt;span class=&quot;nt&quot;&gt;--min-age&lt;/span&gt; 2w delete &amp;lt;bucket-name&amp;gt;:&amp;lt;bucket-path&amp;gt;
+    rclone &lt;span class=&quot;nt&quot;&gt;--config&lt;/span&gt; /root/.config/rclone/rclone.conf copy &amp;lt;storage-path&amp;gt; &amp;lt;bucket-name&amp;gt;:&amp;lt;bucket-path&amp;gt;
+&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;if [ &quot;$1&quot; == &quot;job-end&quot; ]&lt;/code&gt; is the script entrypoint safeguard. The script will be called on multiple stages of the execution of any backup job, but sync should only happen after it’s finished.&lt;/p&gt;
+
+&lt;p&gt;All &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rclone&lt;/code&gt; commands are appended with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;--config&lt;/code&gt; option followed by the config file location. In my case, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rclone&lt;/code&gt; would fail to locate the config file when called by cron.&lt;/p&gt;
+
+&lt;p&gt;First command, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;delete&lt;/code&gt; with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;--min-age&lt;/code&gt; option is my simple approach to implementing backups rotation mechanism. You can replace the value of 2 weeks with a retention time that suits you. Alternatively, you can apply &lt;a href=&quot;https://www.backblaze.com/b2/docs/file_versions.html&quot;&gt;lifecycle rules[5]&lt;/a&gt; to the bucket, so that the files will be purged automatically after specified period of time.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/2022/lifecycle_rules.png&quot; alt=&quot;Screenshot showing a lifecycle settings of a sample B2 bucket&quot; /&gt;&lt;/p&gt;
+
+&lt;div class=&quot;note&quot;&gt;
+&lt;p&gt;Pay attention to the `hard_delete` option in the `rclone` config of your B2 bucket. By default, it is set to `false` and the wizard prompts you about it during the configuration setup. If the bucket lifecycle policy is **not** set to *Keep only the last version of the file*, `rclone delete` will not in fact delete a file from the bucket. Instead, it is going to hide the file[6] with the hide marker.&lt;/p&gt;
+&lt;p&gt;Hidden files consume storage space and you are charged for them. By default, B2 buckets keep all revisions of the file.&lt;/p&gt;
+&lt;/div&gt;
+
+&lt;p&gt;Second command, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;copy&lt;/code&gt;, actually synchronizes content of the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;&amp;lt;storage-path&amp;gt;&lt;/code&gt; with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;&amp;lt;bucket-path&amp;gt;&lt;/code&gt; of the bucket denoted by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;&amp;lt;bucket-name&amp;gt;&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Replace the script with the actual path of backup dumps location and target bucket name, then edit &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/etc/pve/vzdump.cron&lt;/code&gt; file.&lt;/p&gt;
+
+&lt;p&gt;Warning in the heading comment can be safely ignored. Making changes to the job using web front-end writes changes directly to this file. We will be adding the option that is not possible to add with the GUI. Any further changes made to the job using the GUI won’t affect it.&lt;/p&gt;
+
+&lt;p&gt;Find the line responsible for scheduling the backup job of your choice and add the option &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;--script &amp;lt;path-to-script&amp;gt;&lt;/code&gt; with a path to the script you’ve just created. For example:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;30 3 * * 7      root vzdump 100 --quiet 1 --mode snapshot --script /root/b2-sync.sh --node node-0 --storage vms-storage --compress ztsd --mailnotification always
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;whats-next&quot;&gt;What’s next?&lt;/h2&gt;
+
+&lt;p&gt;You’ve just configured Proxmox backup dumps synchronization with off-site cloud storage hooked with to the backup job finish. If you want to take this setup to the next level, try implementing complex backup retention rules. For example, desired rotation strategy would be:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;keep the latest 14 daily dumps,&lt;/li&gt;
+  &lt;li&gt;keep the latest 8 weekly dumps,
+etc.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&quot;links&quot;&gt;Links&lt;/h2&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[0]: https://www.proxmox.com/en/proxmox-ve
+[1]: https://pve.proxmox.com/wiki/Backup_and_Restore
+[2]: https://www.backblaze.com/b2/cloud-storage.html
+[3]: https://rclone.org/#providers
+[4]: https://pve.proxmox.com/wiki/Backup_and_Restore#_hook_scripts
+[5]: https://www.backblaze.com/b2/docs/file_versions.html
+[6]: https://www.backblaze.com/b2/docs/b2_hide_file.html
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+</description>
+        <pubDate>Tue, 20 Sep 2022 00:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/pve-cloud-backup/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/pve-cloud-backup/</guid>
+        
+        <category>linux</category>
+        
+        <category>sysop</category>
+        
+        <category>proxmox</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>How to restrict network access of LXC container</title>
+        <description>&lt;p&gt;So let’s say you have to run that sketchy or untrusted executable/project/binary/whatever and you want to do in a safe manner. Wide range of applicable solutions based on virtualization and contenerization technologies allow secure examination of suspicious software in a sandboxed environment.&lt;/p&gt;
+
+&lt;p&gt;If you’re a Linux user, you’d probably point your attention to &lt;a href=&quot;https://linuxcontainers.org/&quot;&gt;&lt;strong&gt;LXC&lt;/strong&gt;[0]&lt;/a&gt;. Just a few commands to bring up shiny new environment based on a distro selected from wide variety of available options, running on the host kernel with no excessive emulation overhead.&lt;/p&gt;
+
+&lt;p&gt;That alone provides decent separation from whatever you don’t want an object of research to touch in your workstation. &lt;strong&gt;But what about connectivity?&lt;/strong&gt;&lt;/p&gt;
+
+&lt;!--break--&gt;
+
+&lt;p&gt;Permitting an unknown actor unrestricted access to the Internet or LAN poses serious threat. At the same time, the container is going to need it to some extent, for installing packages or remote access from host. Wouldn’t it be convenient to switch the network access restrictions of the container on and off at any time?&lt;/p&gt;
+
+&lt;h2 id=&quot;use-a-nat-bridge&quot;&gt;Use a NAT bridge&lt;/h2&gt;
+
+&lt;p&gt;Fairly simple way to achieve it is to use &lt;strong&gt;iptables&lt;/strong&gt; in conjunction with &lt;strong&gt;lxc-net&lt;/strong&gt;. Using &lt;em&gt;lxc-net&lt;/em&gt; assumes running the container behind a NAT bridge. If you want to bridge the container to LAN, the tool of your choice might provide a built-in mechanism to achieve similar effect&lt;a href=&quot;https://wiki.archlinux.org/title/Network_bridge&quot;&gt;[1]&lt;/a&gt;. In my opinion, having the container behind local NAT provides higher level of resilience and control. In case of having to expose the container to wider publicity, you can always redirect traffic from host to lxc.&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;# iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 2221 -j DNAT --to-destination 10.0.3.100:22
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The example rule above forwards TCP traffic origination on port &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;2221&lt;/code&gt; of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;eth0&lt;/code&gt; interface to lxc SSH server running on &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;10.0.3.100:22&lt;/code&gt;&lt;a href=&quot;https://wiki.archlinux.org/title/Linux_Containers#Example_iptables_rule&quot;&gt;[2]&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Arch Linux Wiki &lt;a href=&quot;https://wiki.archlinux.org/title/Linux_Containers#Example_iptables_rule&quot;&gt;article[2]&lt;/a&gt; I took this rule from serves as a pretty good introduction to using &lt;em&gt;lxc-net&lt;/em&gt; and lxc as whole. There’s no point in me repeating most of its content, so give it a read if you’re not familiar with lxc. At the end of a day, you should have a lxc container running behind NAT managed by &lt;em&gt;lxc-net&lt;/em&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;firewall-setup&quot;&gt;Firewall setup&lt;/h2&gt;
+
+&lt;p&gt;Assuming that you have used default configuration, CIDR of your lxc subnet is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;10.0.3.0/24&lt;/code&gt;. Running &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lxc-ls -f&lt;/code&gt; returns a list of containers similar to this:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;NAME    STATE   AUTOSTART GROUPS IPV4       IPV6 UNPRIVILEGED
+lxc0    RUNNING 0         -      10.0.3.250 -    false
+lxc1    STOPPED 0         -      -          -    false
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;We’ll be imposing restrictions on &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lxc0&lt;/code&gt; container. Take note of its IP address – &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;10.0.3.250&lt;/code&gt; in my case.&lt;/p&gt;
+
+&lt;p&gt;You should also know name of the interface managed by &lt;em&gt;lxc-net&lt;/em&gt;. It’s mentioned in the config file &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/etc/lxc/default.conf&lt;/code&gt; by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lxc.net.0.link&lt;/code&gt; key and by default it’s &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lxcbr0&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;If you run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;iptables -L FORWARD -v&lt;/code&gt; you should see two rules related to it at top of the chain.&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;pkts bytes target     prot opt in     out     source               destination
+    0     0 ACCEPT     all  --  any    lxcbr0  anywhere             anywhere
+    0     0 ACCEPT     all  --  lxcbr0 any     anywhere             anywhere
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;They allow all kinds of traffic on &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lxcbr0&lt;/code&gt; interface in any direction.&lt;/p&gt;
+
+&lt;p&gt;We want to forbid ANY incoming and outgoing traffic from the container except for traffic between the container and host. The address of the host can be obtained from &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/etc/default/lxc-net&lt;/code&gt; file under &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;LXC_ADDR&lt;/code&gt; key and its default value is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;10.0.3.1&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Therefore, this rule should be applied on host &lt;em&gt;iptables&lt;/em&gt;:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;# iptables -I FORWARD 1 -i lxcbr0 ! -d 10.0.3.1 -j DROP
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;It can be explained in a following way:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;-I FORWARD 1&lt;/code&gt; inserts the rule at index 1 of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;FORWARD&lt;/code&gt; chain&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;-i lxcbr0&lt;/code&gt; applies the rule to traffic received on interface called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lxcbr0&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;! -d 10.0.3.1&lt;/code&gt; applies the rule to traffic directed to any IP address, &lt;strong&gt;except&lt;/strong&gt; for &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;10.0.3.1&lt;/code&gt; which is host IP&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;-j DROP&lt;/code&gt; blocks all the traffic matching criteria above&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Additionally, you might block inbound traffic:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;# iptables -I FORWARD 2 -i lxcbr0 ! -s 10.0.3.1 -j DROP
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;In order to test the solution, try connecting to the container’s shell via SSH. It should work fine. Now try pinging any host inside or outside LAN. None of the packets should go through.&lt;/p&gt;
+
+&lt;p&gt;Restriction can be lifted at any time with this command:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;# iptables -D FORWARD 1
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;It removes the rule from chain FORWARD specified by the index. &lt;strong&gt;Note that you need to run it twice if you applied both inbound and outbound blocking rules.&lt;/strong&gt;&lt;/p&gt;
+
+&lt;h2 id=&quot;allowing-multiple-containers-to-communicate&quot;&gt;Allowing multiple containers to communicate&lt;/h2&gt;
+
+&lt;p&gt;If you want to run several containers in the same subnet and allow the traffic to occur between them, but not leak outside, you can modify the rule to drop anything except for packets sourced and addressed to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;10.0.3.0/24&lt;/code&gt; subnet.&lt;/p&gt;
+
+&lt;p&gt;This turns the first rule into:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;# iptables -I FORWARD 1 -i lxcbr0 ! -d 10.0.3.0/24 -j DROP
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Equivalent modification of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;-d&lt;/code&gt; argument can be applied to the outbound rule.&lt;/p&gt;
+
+&lt;h2 id=&quot;links&quot;&gt;Links&lt;/h2&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[0]: https://linuxcontainers.org/
+[1]: https://wiki.archlinux.org/title/Network_bridge
+[2]: https://wiki.archlinux.org/title/Linux_Containers#Example_iptables_rule
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+</description>
+        <pubDate>Fri, 28 Jan 2022 00:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/how-to-restrict-network-in-lxc/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/how-to-restrict-network-in-lxc/</guid>
+        
+        <category>linux</category>
+        
+        <category>itsec</category>
+        
+        <category>tutorial</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>Compiling Python &lt;3.5.3 in 2022</title>
+        <description>&lt;p&gt;Despite Python 3.6 reaching end-of-life just 3 weeks ago&lt;a href=&quot;https://devguide.python.org/devcycle/#end-of-life-branches&quot;&gt;[0]&lt;/a&gt;, the amount of projects depending on older versions of Python 3 is exorbitant. Whilst working on a part of my media library workflow I found myself in need of using an old stalled project based on Python 3.4. Sadly, the code does not execute properly in newer runtimes and no one has ever undertook the task of refactoring it. Therefore, users are forced to run it with 3.4 version interpreter.&lt;/p&gt;
+
+&lt;!--break--&gt;
+
+&lt;p&gt;&lt;strong&gt;tldr; use openssl 1.0 and gcc 10&lt;/strong&gt;&lt;/p&gt;
+
+&lt;h2 id=&quot;short-introduction-to-pyenv&quot;&gt;Short introduction to &lt;em&gt;pyenv&lt;/em&gt;&lt;/h2&gt;
+
+&lt;p&gt;Before getting right into the the crux of the matter, I’d like to interject for a moment in order to familiarize dear reader with Python runtime management tool called &lt;em&gt;pyenv&lt;/em&gt;. This entry is not closely connected with it, however chances of anyone still willing to manually juggle Python runtimes after learning about &lt;em&gt;pyenv&lt;/em&gt; are near to none. It’s just so convenient to use.&lt;/p&gt;
+
+&lt;p&gt;My case isn’t one of its own. Python is notorious for providing poor interoperability between its different versions and the tool I’ve been using for years to mitigate caused inconveniences is &lt;a href=&quot;https://github.com/pyenv/pyenv&quot;&gt;pyenv[1]&lt;/a&gt;. Basically it allows you to install multiple version of Python runtime and switch between them with ease. Let’s say you want to use version &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;3.7.12&lt;/code&gt; – run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;pyenv install 3.7.12&lt;/code&gt;. As Python offers source code tarballs as the only official way of distribution, &lt;em&gt;pyenv&lt;/em&gt; downloads the archive, builds the version of your choice and copies the output binaries to its own runtime directory. Then, switching to the specific version is as simple as executing &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;pyenv global 3.7.12&lt;/code&gt;. From now on, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;python&lt;/code&gt; command should be resolved with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;3.7.12&lt;/code&gt; binary.&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ python --version
+Python 3.7.12
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;&lt;em&gt;pyenv&lt;/em&gt; is very powerful utility on its own, and paired with extension called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;pyevn-virtualenv&lt;/code&gt; has served me as a manager of runtimes for multiple Python projects.&lt;/p&gt;
+
+&lt;p&gt;This time wasn’t supposed to be different and I was very surprised when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;pyenv install 3.4.10&lt;/code&gt; greeted me with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ERROR: The Python ssl extension was not compiled. Missing the OpenSSL lib&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;openssl-10&quot;&gt;OpenSSL 1.0&lt;/h2&gt;
+&lt;p&gt;As per &lt;a href=&quot;https://github.com/pyenv/pyenv/wiki/Common-build-problems#2-your-openssl-version-is-incompatible-with-the-python-version-youre-trying-to-install&quot;&gt;pyenv docs[2]&lt;/a&gt;, old Python versions (for CPython, &amp;lt;3.5.3 and &amp;lt;2.7.13) require OpenSSL 1.0, while most of the newer systems ship with 1.1.x version by default. However, most also provide 1.0.2 version available as a separate package to cover incompatibility issues like this. For my distribution, which is Arch Linux, the package is called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;openssl-1.0&lt;/code&gt;. Debian stretch and Ubuntu bionic users might use &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;libssl1.0-dev&lt;/code&gt;.&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ pacman -S openssl-1.0
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;There is no need to uninstall package providing new version of OpenSSL. The compiler just needs to be told where to look for the headers. Run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;pyenv install&lt;/code&gt; again with the following compilation flags:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ CFLAGS=&quot;-I/usr/include/openssl-1.0&quot; LDFLAGS=&quot;-L/usr/lib/openssl-1.0&quot; CPPFLAGS=&quot;-I/usr/include/openssl-1.0&quot; pyenv install 3.4.10
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Verify the paths of OpenSSL 1.0 library beforehand. The command above includes the ones applicable for default Arch Linux setup. They might look different for other distributions.&lt;/p&gt;
+
+&lt;h2 id=&quot;segfault-and-other-compilation-errors&quot;&gt;SEGFAULT and other compilation errors&lt;/h2&gt;
+&lt;p&gt;Compiling older version of Python on Arch Linux and other bleeding edge distros might be interrupted by unexpected compilation error. In my case it was classic segmentation fault. The key is to use older version of gcc. For &lt;em&gt;3.4.10&lt;/em&gt; version, it’s enough to go back to gcc 10, still available as a regular package in Arch Linux.&lt;/p&gt;
+
+&lt;p&gt;Install it:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ pacman -S gcc10
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;And add another flag to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;pyenv install&lt;/code&gt; call – &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CC=gcc-10&lt;/code&gt;:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ CC=gcc-10 CFLAGS=&quot;-I/usr/include/openssl-1.0&quot; LDFLAGS=&quot;-L/usr/lib/openssl-1.0&quot; CPPFLAGS=&quot;-I/usr/include/openssl-1.0&quot; pyenv install 3.4.10
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Compilation should now succeed.&lt;/p&gt;
+
+&lt;h2 id=&quot;summary&quot;&gt;Summary&lt;/h2&gt;
+&lt;p&gt;To wrap everything up – compiling older version of Python on modern systems usually require two tweaks:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;providing OpenSSL 1.0 library as an alternative to any other version installed on the system&lt;/li&gt;
+  &lt;li&gt;using GCC 10 instead of recently released GCC 11&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;In Arch Linux it all narrows down to just two commands:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;pacman -S openssl-1.0 gcc10
+CC=gcc-10 CFLAGS=&quot;-I/usr/include/openssl-1.0&quot; LDFLAGS=&quot;-L/usr/lib/openssl-1.0&quot; CPPFLAGS=&quot;-I/usr/include/openssl-1.0&quot; pyenv install 3.4.10
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Happy coding, scripting or whatever you need old Python for. Don’t forget to consider refactoring the code to run correctly in newer runtime, as OpenSSL 1.0 embedded in legacy Python executable is EOL and any internet-facing applications should not rely on it anymore.&lt;/p&gt;
+
+&lt;h2 id=&quot;links&quot;&gt;Links&lt;/h2&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[0]: https://devguide.python.org/devcycle/#end-of-life-branches
+[1]: https://github.com/pyenv/pyenv
+[2]: https://github.com/pyenv/pyenv/wiki/Common-build-problems#2-your-openssl-version-is-incompatible-with-the-python-version-youre-trying-to-install
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;~~~&lt;/p&gt;
+</description>
+        <pubDate>Sat, 15 Jan 2022 00:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/compiling-python34-in-2022/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/compiling-python34-in-2022/</guid>
+        
+        <category>linux</category>
+        
+        <category>python</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>Wine not detecting drives in winecfg</title>
+        <description>&lt;p&gt;Just wanted to drop this quick fix for anyone who runs into it the same issue as the viable solution is not trivial to find. My two evenings full of efforts prove it.&lt;/p&gt;
+
+&lt;p&gt;When I run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;winecfg&lt;/code&gt; and try to go into &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Drives&lt;/code&gt; tab to make a change in the config, there’s an error message saying:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Failed to connect to the mount manager, the drive configuration cannot be edited.
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;!--break--&gt;
+
+&lt;p&gt;Looking at stdout of the process, this log entry can be spotted:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;0009:err:winecfg:open_mountmgr failed to open mount manager err 2
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Several topics on WineHQ forums provide no insight into the cause of the problem, besides fact that it predominantly occurs on 64-bit systems running 32-bit Wine prefixes.&lt;/p&gt;
+
+&lt;p&gt;The solution I found is to run this command:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;wineboot --update
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Alerts about uninstalled Mono or other dependencies can be safely ignored. After the command finished running, I was more than happy to run &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;winecfg&lt;/code&gt; and see drives configuration in its right place.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/2021/winecfgdrives.png&quot; alt=&quot;winecfg 'Drives' tab&quot; /&gt;&lt;/p&gt;
+</description>
+        <pubDate>Thu, 02 Dec 2021 00:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/wine-not-detecting-disks/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/wine-not-detecting-disks/</guid>
+        
+        <category>linux</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>Change GTKFileChooser to KDE Dolphin file chooser in Arch Linux</title>
+        <description>&lt;p&gt;&lt;img src=&quot;/images/2021/gtkfilechooser.png&quot; alt=&quot;GTKFileChooser window&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;GTK, while being widely adopted and utilized by thousands of apps is still suffering from that unresolved &lt;a href=&quot;https://gitlab.gnome.org/GNOME/gtk/-/issues/233&quot;&gt;Add an “icon view with thumbnails”[0]&lt;/a&gt; issue that has been residing in the project bug tracker for over 17 years (at the time of writing this article, November 2021). Personally, I’ve learned about it fairly recently reading &lt;a href=&quot;https://jayfax.neocities.org/mediocrity/gnome-has-no-thumbnails-in-the-file-picker.html&quot;&gt;the article comparing GtkFileChooser to a clogged toilet[1]&lt;/a&gt;, which explains how the inconvenience caused by the issue mostly went unnoticed by many users (including me) for years. It seems like it was a turning point in the life of the issue, as now its presence is being brought up on almost a daily basis in many informal tech communities. Most often, the purpose is scapegoating GTK as an entirety. The reasoning is that if such a conceptually simple, UX-crucial and obviously present at any notable competitor feature cannot be implemented since almost beginning of the project, then something is seriously wrong with the project itself. Perhaps it’s a convoluted codebase, bad maintaining or inadequate concepts fossilized into the core of the project.&lt;/p&gt;
+
+&lt;p&gt;I had used GNOME as my DE for 4 years. This means I was obviously affected by the issue, but chose not to care about it for a while. Since a few months, I’ve been using only WMs for my daily work, which gave me a bit more flexibility in choosing the tools I like. This post explains how I installed alternative file chooser and set it to be the default one first in Firefox and (almost) globally on my Arch Linux setup.&lt;/p&gt;
+
+&lt;!--break--&gt;
+
+&lt;h2 id=&quot;installing-dolphin&quot;&gt;Installing Dolphin&lt;/h2&gt;
+
+&lt;p&gt;A brief research conducts GNOME competitor – KDE includes a file chooser with said functionality implemented. File chooser is actually a part of KDE’s default file manager called &lt;a href=&quot;https://apps.kde.org/dolphin/&quot;&gt;Dolphin[2]&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;It can be installed on Arch as a separate package (without KDE and most of the dependencies). In my case, it required these dependencies to be installed:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ sudo pacman -S dolphin
+resolving dependencies...
+:: There are 2 providers available for phonon-qt5-backend:
+:: Repository extra
+   1) phonon-qt5-gstreamer  2) phonon-qt5-vlc
+
+Enter a number (default=1): 1
+looking for conflicting packages...
+warning: dependency cycle detected:
+warning: usbmuxd will be installed before its libimobiledevice dependency
+warning: dependency cycle detected:
+warning: phonon-qt5-gstreamer will be installed before its phonon-qt5 dependency
+
+Packages (82) attica-5.87.0-1  baloo-5.87.0-1  baloo-widgets-21.08.3-1  cdparanoia-10.2-8
+              convertlit-1.8-10  dmraid-1.0.0.rc16.3-13  dosfstools-4.2-1
+              ebook-tools-0.2.2-7  exiv2-0.27.5-1  gptfdisk-1.0.8-1
+              gst-plugins-base-1.18.5-1  kactivities-5.87.0-1  karchive-5.87.0-1
+              kauth-5.87.0-1  kbookmarks-5.87.0-1  kcmutils-5.87.0-1  kcodecs-5.87.0-1
+              kcompletion-5.87.0-1  kconfig-5.87.0-1  kconfigwidgets-5.87.0-1
+              kcoreaddons-5.87.0-1  kcrash-5.87.0-1  kdbusaddons-5.87.0-1
+              kdeclarative-5.87.0-1  kded-5.87.0-1  kdnssd-5.87.0-1  kdsoap-2.0.0-1
+              kdsoap-ws-discovery-client-git20200927-2  kfilemetadata-5.87.0-1
+              kglobalaccel-5.87.0-1  kguiaddons-5.87.0-1  ki18n-5.87.0-1
+              kiconthemes-5.87.0-1  kidletime-5.87.0-1  kio-5.87.0-1  kio-extras-21.08.3-1
+              kitemviews-5.87.0-1  kjobwidgets-5.87.0-1  knewstuff-5.87.0-1
+              knotifications-5.87.0-1  kpackage-5.87.0-1  kparts-5.87.0-1  kservice-5.87.0-1
+              ktextwidgets-5.87.0-1  kuserfeedback-1.0.0-1  kwallet-5.87.0-1
+              kwidgetsaddons-5.87.0-1  kwindowsystem-5.87.0-1  kxmlgui-5.87.0-1
+              libatasmart-0.19-5  libblockdev-2.26-1  libbytesize-2.6-1
+              libimobiledevice-1.3.0-3  libinih-53-1  libmtp-1.1.19-1  libplist-2.2.0-3
+              libtommath-1.2.0-3  libusbmuxd-2.0.2-1  libvisual-0.4.0-8  libyaml-0.2.5-1
+              libzip-1.8.0-1  mdadm-4.1-2  media-player-info-24-2  ndctl-71.1-1  parted-3.4-2
+              phonon-qt5-4.11.1-2  phonon-qt5-gstreamer-4.10.0-2  polkit-qt5-0.114.0-1
+              poppler-qt5-21.11.0-1  qt5-multimedia-5.15.2-1  qt5-speech-5.15.2-1
+              solid-5.87.0-1  sonnet-5.87.0-1  syndication-5.87.0-1
+              syntax-highlighting-5.87.0-2  taglib-1.12-1  udisks2-2.9.4-1  upower-0.99.13-1
+              usbmuxd-1.1.1-1  volume_key-0.3.12-5  xfsprogs-5.13.0-1  dolphin-21.08.3-1
+
+Total Download Size:    53.64 MiB
+Total Installed Size:  200.73 MiB
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Those caring about “not bloating screenfetch” might stop reading right here. I don’t belong to that clique, and just continue.&lt;/p&gt;
+
+&lt;h2 id=&quot;enabling-dolphin-as-default-file-chooser&quot;&gt;Enabling Dolphin as default file chooser&lt;/h2&gt;
+
+&lt;p&gt;Now Dolphin is installed, but other applications needs to be instructed to use its component instead of GtkFileChooser. Unfortunately, whether GTK application is able to use alternative system dialogs or not depends on it implementing &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;xdg-desktop-portal&lt;/code&gt; front-end service. Good portion of modern software does it, but be prepared to keep using GtkFileChooser in some apps.&lt;/p&gt;
+
+&lt;p&gt;Install packages &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;xdg-desktop-portal xdg-desktop-portal-kde&lt;/code&gt;. Set environment variable &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GTK_USE_PORTAL=1&lt;/code&gt; in &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/etc/environment&lt;/code&gt; to apply this solution globally, or in &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;~/.bash_profile&lt;/code&gt; to apply it for a user&lt;a href=&quot;https://wiki.archlinux.org/title/Uniform_look_for_Qt_and_GTK_applications#Consistent_file_dialog&quot;&gt;[3]&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Reload session (log out and in). You should now be greeted with Dolphin file chooser in Firefox:
+&lt;img src=&quot;/images/2021/dolphinfilechooser.png&quot; alt=&quot;Dolphin file chooser window&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Some other apps I use on a daily basis started using Dolphin instead of GTK file chooser out of a box:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Chromium&lt;/li&gt;
+  &lt;li&gt;telegram-desktop&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;And some didn’t change their behavior:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Discord (GTK)&lt;/li&gt;
+  &lt;li&gt;VSCode (GTK)&lt;/li&gt;
+  &lt;li&gt;KeePassXC (Qt)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Let’s try briefly checking what’s the problem with each of them.&lt;/p&gt;
+
+&lt;h3 id=&quot;electron-apps-support-xdg_desktop_portal-since-14&quot;&gt;Electron apps support XDG_DESKTOP_PORTAL since 14&lt;/h3&gt;
+
+&lt;p&gt;Support for XDG_DESKTOP_PORTAL has been &lt;a href=&quot;https://github.com/electron/electron/pull/19159&quot;&gt;merged to Electron in April 2021[4]&lt;/a&gt;, however it was evaluated as not stable enough to be introduced in 13.x version and postponed for the release of Electron 14. &lt;a href=&quot;https://github.com/electron/electron/releases/tag/v14.0.0&quot;&gt;The release happened on 31th August, 2021[5]&lt;/a&gt;. Given the amount of time passed since then, it’s no wonder that few apps moved to Electron 14 from earlier versions.&lt;/p&gt;
+
+&lt;p&gt;In case of VSCode, a version of Electron it’s running on can be easily checked by opening developer console (Help &amp;gt; Toggle Developer Options) and executing:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&amp;gt; process.versions.electron
+&amp;lt; &quot;13.5.1&quot;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;As for now, neither Arch Linux package repositories or AUR provide any flavor of VSCode built with Electron 14. The only solution appears to be &lt;a href=&quot;https://github.com/Microsoft/vscode/wiki/How-to-Contribute#build-and-run&quot;&gt;building VSCode from scratch with custom internals[6]&lt;/a&gt;. To me, it’s not worth the hassle and I’m going to just wait for VSCode to adopt Electron 14.&lt;/p&gt;
+
+&lt;p&gt;I had found no way of checking version of Electron Discord is running on, but I strongly suspect it’s the same cause as in VSCode case.&lt;/p&gt;
+
+&lt;h3 id=&quot;qt-uses-qfiledialog&quot;&gt;Qt uses QFileDialog&lt;/h3&gt;
+
+&lt;p&gt;And it seems to suffer from the same issue, as GTKFileChooser.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/2021/qfiledialog.png&quot; alt=&quot;QFileDialog window&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://docs.flatpak.org/en/latest/portals-qt.html&quot;&gt;Running Qt in Flatpak Sandbox might mitigate the issue[7]&lt;/a&gt;. Debian provides this functionality on Flatpak/Snap based environments with &lt;a href=&quot;https://packages.debian.org/bullseye/qt5-xdgdesktopportal-platformtheme&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;qt5-xdgdesktopportal-platformtheme&lt;/code&gt;[8]&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Unfortunately, I found no solution applicable for my setup.&lt;/p&gt;
+
+&lt;h2 id=&quot;tweaking-file-chooser&quot;&gt;Tweaking file chooser&lt;/h2&gt;
+
+&lt;p&gt;Dolphin file chooser works wherever it’s possible now. But it still suffers from some caveats. Let’s go through the list and try to fix them.&lt;/p&gt;
+
+&lt;h3 id=&quot;firefox-continuously-asks-to-be-set-as-default-browser-upon-launch&quot;&gt;Firefox continuously asks to be set as default browser upon launch&lt;/h3&gt;
+&lt;p&gt;Setting &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;XDG_DESKTOP_PORTAL=1&lt;/code&gt; triggers another, long-lasting &lt;a href=&quot;https://bugzilla.mozilla.org/show_bug.cgi?id=1516290&quot;&gt;bug[9]&lt;/a&gt;. This time, it affects Mozilla Firefox. It can be silenced by setting &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;browser.shell.checkDefaultBrowser&lt;/code&gt; to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;false&lt;/code&gt; in &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;about:config&lt;/code&gt;. Essentially equivalent of just going to &lt;em&gt;Settings&lt;/em&gt; page and unchecking &lt;em&gt;Always check if Firefox is your default browser&lt;/em&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;thumbnails-for-other-media-types&quot;&gt;Thumbnails for other media types&lt;/h3&gt;
+
+&lt;p&gt;Out of a box, Dolphin file chooser renders thumbnails for most of image file types. However, it’s not capable of generating thumbnails for videos.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/images/2021/novideothumbs.png&quot; alt=&quot;Dolphin file chooser window showing video files with no thumbnails&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Install optional dependency &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ffmpegthumbs&lt;/code&gt;. This provides functionality of rendering thumbnails for most video files.&lt;/p&gt;
+
+&lt;p&gt;You might be tempted to install other optional dependencies, like &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;kdegraphics-thumbnailers&lt;/code&gt; or &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;taglib&lt;/code&gt; for generating thumbnails for other types of files. Keep in mind they work in main Dolphin file browser, not in the file chooser. Unless you’re going to use Dolphin file browser itself, installing them doesn’t make any difference.&lt;/p&gt;
+
+&lt;h3 id=&quot;icons&quot;&gt;Icons&lt;/h3&gt;
+
+&lt;p&gt;Dolphin installed separately from KDE does not feature themes. To use default icons set, install package &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;breeze-icons&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;dark-theme-partially&quot;&gt;Dark theme (partially)&lt;/h3&gt;
+
+&lt;p&gt;Default theme of Dolphin file chooser is bright and it might not fit well with dark-color rices. While changing theme for Dolphin file browser is possible through Qt5 settings, &lt;del&gt;theme settings do not apply to the file chooser&lt;/del&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;em&gt;UPDATE: It took several reboots for the file chooser to start respecting dark Qt5 theme, however I don’t know cause behind this behavior. Feel free to follow instructions below and it might work for you out-of-the-box or after a few days of some sort of transition.&lt;/em&gt;&lt;/p&gt;
+
+&lt;p&gt;Changing Qt5 apps theme without KDE Plasma is somewhat challenging on its own, so I’ll explain the method I used, but unfortunately it won’t be any of help for file chooser color scheme.&lt;/p&gt;
+
+&lt;p&gt;Install &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;breeze&lt;/code&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;qt5ct&lt;/code&gt; and run it. If you see a warning about program not properly configured, set &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;QT_QPA_PLATFORMTHEME=qt5ct&lt;/code&gt; environment variable and run it again.&lt;/p&gt;
+
+&lt;p&gt;In the &lt;em&gt;Appearance&lt;/em&gt; tab, select style &lt;em&gt;Breeze&lt;/em&gt; and custom &lt;em&gt;Palette&lt;/em&gt; called &lt;em&gt;darker&lt;/em&gt;. Click &lt;em&gt;Ok&lt;/em&gt; and re-run Dolphin.&lt;/p&gt;
+
+&lt;p&gt;It’s going to look pretty bad now. While most of the interface now has dark theme applied, background is solid white. Exit Dolphin and edit &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;~/.config/kdeglobals&lt;/code&gt; file adding:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[Colors:View]
+BackgroundNormal=23,23,24
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;p&gt;(this setting might already be there, just replace the value then)&lt;/p&gt;
+
+&lt;p&gt;Use RGB format for any color you like.&lt;/p&gt;
+
+&lt;p&gt;To make GTK theme match new Breeze Darker, install &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;breeze-gtk&lt;/code&gt;. You can set it using a convenient GUI called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;lxappearance&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;alternatives&quot;&gt;Alternatives&lt;/h2&gt;
+
+&lt;p&gt;GNOME’s powerlessness in fixing this bug yielded many unofficial, fork- or plugin-based solutions. To name one, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;gtk3-patched-filechooser-icon-view&lt;/code&gt; is available in AUR. If you’re all fine with GTK file chooser except for thumbnails matter, this might be a way to go. Personally, I find Dolphin file chooser much more appealing (even in its bright outfit) and admire UI transparency with full-fledged customization options. My recommendation is to try it out. In case you don’t like, just revert back to GTK.&lt;/p&gt;
+
+&lt;h2 id=&quot;links&quot;&gt;Links&lt;/h2&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[0]: https://gitlab.gnome.org/GNOME/gtk/-/issues/233
+[1]: https://jayfax.neocities.org/mediocrity/gnome-has-no-thumbnails-in-the-file-picker.html
+[2]: https://apps.kde.org/dolphin/
+[3]: https://wiki.archlinux.org/title/Uniform_look_for_Qt_and_GTK_applications#Consistent_file_dialog
+[4]: https://github.com/electron/electron/pull/19159
+[5]: https://github.com/electron/electron/releases/tag/v14.0.0
+[6]: https://github.com/Microsoft/vscode/wiki/How-to-Contribute#build-and-run
+[7]: https://docs.flatpak.org/en/latest/portals-qt.html
+[8]: https://packages.debian.org/bullseye/qt5-xdgdesktopportal-platformtheme
+[9]: https://bugzilla.mozilla.org/show_bug.cgi?id=1516290
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;~~~&lt;/p&gt;
+</description>
+        <pubDate>Sun, 07 Nov 2021 01:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/change-gtk-file-picker-to-kde-dolphin/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/change-gtk-file-picker-to-kde-dolphin/</guid>
+        
+        <category>linux</category>
+        
+        <category>arch</category>
+        
+        <category>ricing</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>Fix JetBrains IDEA IntelliJ not working on bspwm (gray window issue)</title>
+        <description>&lt;p&gt;An easily reproducible issue I’ve recently been running into is &lt;strong&gt;JetBrains IDEs not being displayed properly in &lt;a href=&quot;https://github.com/baskerville/bspwm&quot;&gt;bspwm[0]&lt;/a&gt; environment&lt;/strong&gt;. Instead of IDE graphical interface, only a gray solid window is being shown.&lt;/p&gt;
+
+&lt;p&gt;There’s nothing innovatory about this fix, however it seems like it has never been mentioned in this particular context, meaning &lt;strong&gt;running IntelliJ on bspwm and xorg&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;!--break--&gt;
+
+&lt;p&gt;This issue has been described in &lt;a href=&quot;https://wiki.archlinux.org/title/Java#Gray_window,_applications_not_resizing_with_WM,_menus_immediately_closing&quot;&gt;Troubleshooting section of Java article on ArchLinux wiki[1]&lt;/a&gt;, although it doesn’t mention the fix method for bspwm.&lt;/p&gt;
+
+&lt;p&gt;What needs to be done is &lt;strong&gt;to export &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_JAVA_AWT_WM_NONREPARENTING=1&lt;/code&gt;&lt;/strong&gt;. Just like in the solution for Sway desktop environment.&lt;/p&gt;
+
+&lt;p&gt;The easiest way to achieve this in xorg environment is to add this line in &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;~/.xinitrc&lt;/code&gt;:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;export _JAVA_AWT_WM_NONREPARENTING=1
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;links&quot;&gt;Links&lt;/h2&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[0]: https://github.com/baskerville/bspwm
+[1]: https://wiki.archlinux.org/title/Java#Gray_window,_applications_not_resizing_with_WM,_menus_immediately_closing
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+</description>
+        <pubDate>Tue, 20 Jul 2021 01:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/bspwm-intellij-fix/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/bspwm-intellij-fix/</guid>
+        
+        <category>linux</category>
+        
+        <category>ricing</category>
+        
+        <category>java</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>How I cracked obscure zlib compression format of old MySQL blobs</title>
+        <description>&lt;p&gt;Looking around the web for old &lt;a href=&quot;https://en.wikipedia.org/wiki/Nuke_(warez)#Pre_database&quot;&gt;pre databases[0]&lt;/a&gt; I stumbled upon &lt;a href=&quot;http://rescene.wikidot.com/scene-databases&quot;&gt;this nice collection of preDBs dumps[1]&lt;/a&gt;. &lt;a href=&quot;http://rescene.wikidot.com/dump-islander&quot;&gt;The one[2]&lt;/a&gt; that caught my interest was shared by the user called Islander to celebrate him &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;quitting this world and starting a real life&lt;/code&gt;. Shared in October 2014, it was built across years 2005-2011, supposedly being the biggest database of nfos, sfvs and other metadata at 2011.&lt;/p&gt;
+
+&lt;p&gt;7.7GB RAR archive includes 452MB SQL dump of pre entries and over 5.3GB SQL dump of nfo files. After importing these dumps into MySQL database server (8.0.21 hosted in Docker) I discovered that something is off with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;nfo&lt;/code&gt; schema.&lt;/p&gt;
+
+&lt;!--break--&gt;
+
+&lt;p&gt;To briefly give an idea on how the table looks like:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&amp;gt; SELECT COLUMN_NAME, ORDINAL_POSITION, COLUMNT_TYPE FROM information_schema.columns where TABLE_NAME='nfo'
+
+&amp;lt;
+COLUMN_NAME	ORDINAL_POSITION    COLUMN_TYPE
+id              1	            int unsigned
+rel_name        2                   varchar
+rel_nfo         3                   longblog
+rel_filename    4                   varchar	
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Cool. Let’s snatch one of those blobs:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&amp;gt; SELECT CONVERT(rel_nfo using ascii) from nfo where id=85443
+
+&amp;lt; &quot;$x????v??????M???b?J????&amp;amp;n?M?R????a$?bM?*E??...
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Huh? Turns out blobs are compressed. Since it’s MySQL, my first guess is of course &lt;strong&gt;zlib&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;p&gt;Trying to decompress the file using Python &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;zlib&lt;/code&gt; module:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&amp;gt;&amp;gt;&amp;gt; import zlib
+&amp;gt;&amp;gt;&amp;gt; with open('./nfo-rel_nfo.bin', 'rb') as file:
+...     zlib.decompress(file)
+... 
+Traceback (most recent call last):
+  File &quot;&amp;lt;stdin&amp;gt;&quot;, line 2, in &amp;lt;module&amp;gt;
+zlib.error: Error -3 while decompressing data: incorrect header check
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;No luck. Maybe it’s not zlib after all? I decide to verify that using &lt;a href=&quot;https://github.com/ReFirmLabs/binwalk&quot;&gt;binwalk[3]&lt;/a&gt;, a tool for heuristic binary-level analysis.&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ binwalk nfo-rel_nfo.bin
+
+DECIMAL       HEXADECIMAL     DESCRIPTION
+--------------------------------------------------------------------------------
+4             0x4             Zlib compressed data, default compression
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;It detects zlib signature at &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x04&lt;/code&gt; byte. How does it look like?&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ xxd nfo-rel_nfo.bin | head -1
+00000000: 2224 0000 789c a599 dd76 dbb8 1180 eff5  &quot;$..x....v......
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Perhaps it’s worth take a look at other file?&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;xxd nfo-rel_nfo-0.bin | head -1
+00000000: 314e 0000 789c ed5c dd72 dbc6 92be dfaa  1N..x..\.r......
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;After confirming it with numerous other files, it seems all of them share the same &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x2, 0x3&lt;/code&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x4&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x5&lt;/code&gt; bytes. What does it mean in terms of zlib compression?&lt;/p&gt;
+
+&lt;p&gt;My first steps lead me to &lt;a href=&quot;https://tools.ietf.org/html/rfc1950&quot;&gt;RFC 1950[4]&lt;/a&gt; stating, that:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x0&lt;/code&gt; defines CMF (Compression Method and flags)&lt;/li&gt;
+  &lt;li&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x1&lt;/code&gt; defines FLG (FLaGs)&lt;/li&gt;
+  &lt;li&gt;from &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x2&lt;/code&gt; to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x5&lt;/code&gt; represent DICT if flag FDICT was set on 5th bit of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x1&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;everything beyond that point is compressed data&lt;/li&gt;
+  &lt;li&gt;files ends with Adler-32 checksum&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Considering that all the files share the same bytes from 3rd to 6th, that are supposed to be either part of compression stream or FDICT while 1st and 2nd one are always different, it doesn’t make much of a sense.&lt;/p&gt;
+
+&lt;p&gt;After hours of searching, I found &lt;a href=&quot;https://stackoverflow.com/q/59494980/6158307&quot;&gt;this stackoverflow question[5]&lt;/a&gt; asked by someone struggling with a similar problem. Upgrading zlib in some networking library broke the mutual compatibility between resources using old and new version of that library.&lt;/p&gt;
+
+&lt;p&gt;They noticed that old zlib library (possibly 1.1.3) returns:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;00000000: 1f00 0000 789c 0bc9 c82c 5600 a244 8592  ....x....,V..D..
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;While 1.2.11 returns:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;00000000: 78da 0bc9 c82c 5600 a244 8592 d4e2 1285  x....,V..D......
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Supposing the shared part starting with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x0bc9 c82c 5600 a244...&lt;/code&gt; is compressed data stream, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x789c&lt;/code&gt; are flags for 1.1.3 zlib compression and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x78da&lt;/code&gt; are flags set by zlib 1.2.11. However, old zlib adds a little extra to the output - &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x1f000000&lt;/code&gt;. What’s the meaning behind that?&lt;/p&gt;
+
+&lt;p&gt;That person eventually found the answer on the same day. Citing:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Turns out the older zlib - or possibly the older networking library - had a 32-bit &quot;uncompressed output&quot; size prepended to its compressed output.
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Let’s checkout that theory! Coincidentally, yet luckily I’m in possession of uncompressed version of this nfo file acquired somewhere else.&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;$ ls -l 00-va_-_big_dance_party_vol_1-\(185_312\)-1994-zzzz.nfo 
+-rw-r--r-- 1 max max 9250 Mar  9 01:02 '00-va_-_big_dance_party_vol_1-(185_312)-1994-zzzz.nfo'
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;9250 bytes. Going back to that strange signature, first 32 bits are: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x22240000&lt;/code&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;572784640&lt;/code&gt; converted to decimal. Not even close to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;9250&lt;/code&gt;. It took me a few moments to realize my mistake. Of course it needs to be read in little-endian order! After swapping - &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x00002422&lt;/code&gt; is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;9250&lt;/code&gt;! Gotcha!!&lt;/p&gt;
+
+&lt;p&gt;Let’s try removing first 32 bits of the file to fix flags offset and see what happens:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&amp;gt;&amp;gt;&amp;gt; with open('./nfo-rel_nfo.bin', 'rb') as input, open('./out.nfo', 'wb') as output:
+...     x = zlib.decompress(input.read())
+...     #  no more errors yay! :D
+...     output.write(x)
+... 
+9250
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;It seems it worked. Let’s check out the output:
+&lt;img src=&quot;/images/2020/zzzz.png&quot; alt=&quot;Screenshot showing decompressed file&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Victory! Now, in order to extract all the nfos from the database, I wrote this nice little Python script:&lt;/p&gt;
+&lt;div class=&quot;language-python highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kn&quot;&gt;from&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;pathlib&lt;/span&gt; &lt;span class=&quot;kn&quot;&gt;import&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Path&lt;/span&gt;
+&lt;span class=&quot;kn&quot;&gt;import&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;zlib&lt;/span&gt;
+
+&lt;span class=&quot;kn&quot;&gt;import&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;mysql.connector&lt;/span&gt;
+&lt;span class=&quot;kn&quot;&gt;from&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;tqdm&lt;/span&gt; &lt;span class=&quot;kn&quot;&gt;import&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tqdm&lt;/span&gt;
+
+
+&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;__name__&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;'__main__'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;dump_path&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;'/home/max/Projects/pre_archive/islander'&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;cnx&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mysql&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;connector&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;connect&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'root'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'root'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+                                  &lt;span class=&quot;n&quot;&gt;host&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'localhost'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;database&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'islander'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;cursor&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cnx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;cursor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;data_query&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;'SELECT rel_name, rel_filename, rel_nfo FROM nfo;'&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;count_query&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;'SELECT COUNT(*) FROM nfo;'&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;cursor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;execute&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;count_query&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;nfo_count&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cursor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fetchone&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;cursor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;execute&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data_query&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;with&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tqdm&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;total&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nfo_count&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;])&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;as&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pbar&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rel_name&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rel_filename&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rel_nfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cursor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;release_path&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;sa&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dump_path&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rel_name&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;filename&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;sa&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rel_name&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;.nfo'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;replace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'/'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;''&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+            &lt;span class=&quot;n&quot;&gt;Path&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;release_path&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;mkdir&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;parents&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;True&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;exist_ok&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;bp&quot;&gt;True&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+            &lt;span class=&quot;k&quot;&gt;with&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;open&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;sa&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;release_path&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;filename&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;'wb'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;as&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nfo_file&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;try&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;
+                    &lt;span class=&quot;n&quot;&gt;d&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;zlib&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;decompress&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rel_nfo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:])&lt;/span&gt;  &lt;span class=&quot;c1&quot;&gt;# trim 32 header and decompress
+&lt;/span&gt;                    &lt;span class=&quot;n&quot;&gt;nfo_file&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+                    &lt;span class=&quot;n&quot;&gt;nfo_file&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;close&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;except&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;zlib&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;error&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;
+                    &lt;span class=&quot;k&quot;&gt;print&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;sa&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'Error decompressing: &lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rel_name&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+            &lt;span class=&quot;n&quot;&gt;pbar&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;update&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;cursor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;close&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;cnx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;close&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
+
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Crucial part is the line 32, where binary data is being read by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;zlib.decompress&lt;/code&gt; omitting first 4 bytes. After adding some precautious steps to the script (some filenames has forbidden characters, plus ext4 doesn’t handle 72,923 files in a single directory well) I was able to decompress all the blobs in this database 🎉🥰&lt;/p&gt;
+&lt;h2 id=&quot;links&quot;&gt;Links&lt;/h2&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[0]: https://en.wikipedia.org/wiki/Nuke_(warez)#Pre_database
+[1]: http://rescene.wikidot.com/scene-databases
+[2]: http://rescene.wikidot.com/dump-islander
+[3]: https://github.com/ReFirmLabs/binwalk
+[4]: https://tools.ietf.org/html/rfc1950
+[5]: https://stackoverflow.com/q/59494980/6158307
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+</description>
+        <pubDate>Sat, 03 Oct 2020 01:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/how-did-i-beat-obscure-zlib-compression-format/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/how-did-i-beat-obscure-zlib-compression-format/</guid>
+        
+        <category>piracy</category>
+        
+        <category>puzzle</category>
+        
+        <category>random</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>Mocking @AuthenticationPrincipal with custom UserDetails object</title>
+        <description>&lt;p&gt;Lately I’ve been working on a project involving Spring Boot and Spring Security. It includes stateless API for authenticating users and restricting access to specific HTTP endpoints. I followed this &lt;a href=&quot;https://golb.hplar.ch/2019/05/stateless.html&quot;&gt;Stateless Authentication with Spring Security[0]&lt;/a&gt; article. Sessions associated with users are stored in the database table, while users authenticate with session ID in &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authorization&lt;/code&gt; request header. Pretty much what JWT does, except for I didn’t know about its existene at the moment, lol.&lt;/p&gt;
+
+&lt;!--break--&gt;
+
+&lt;p&gt;&lt;strong&gt;NOTE: This article follows my journey of debugging the problem, trying different wrong approaches and eventually finding the solution.
+If it’s tldr for you, jump straight to &lt;a href=&quot;#final-solution&quot;&gt;the solution&lt;/a&gt;.&lt;/strong&gt;&lt;/p&gt;
+
+&lt;p&gt;Anyway, I took an advantage of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authentication&lt;/code&gt; storing principal object and created a class implementing &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetails&lt;/code&gt; interface holding my DTO with mapped user entity:&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@RequiredArgsConstructor&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;implements&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Getter&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;final&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Collection&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;?&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;extends&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;GrantedAuthority&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getAuthorities&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;RoleDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;role&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getRole&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;Set&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;GrantedAuthority&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rolesSet&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;HashSet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;gt;();&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;rolesSet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;add&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;SimpleGrantedAuthority&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ROLE_&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;role&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getRoleName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()));&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rolesSet&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getPassword&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getPassword&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getUsername&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getUsername&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;boolean&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;isAccountNonExpired&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getIsActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;boolean&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;isAccountNonLocked&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getIsActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;boolean&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;isCredentialsNonExpired&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getIsActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;boolean&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;isEnabled&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getIsActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Essentially, a proxy class implementing &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetails&lt;/code&gt; with a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDTO&lt;/code&gt; composed in and using its properties for resolving &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetails&lt;/code&gt; implemented methods. This approach allowed me to very easily access properties of a user accessing an endpoint. Consider this &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GET /user/images/&lt;/code&gt; private endpoint, which is supposed to return authenticated user’s uploaded images:&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ResponseEntity&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;userImages&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nd&quot;&gt;@AuthenticationPrincipal&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+       &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+
+       &lt;span class=&quot;nc&quot;&gt;Optional&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;images&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Optional&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;ofNullable&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;imageDTOService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;findAllUploadedBy&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+       &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isEmpty&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+           &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ResponseEntity&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;HttpStatus&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;OK&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;body&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Collections&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;emptyList&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+       &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ResponseEntity&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;HttpStatus&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;OK&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;body&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; 
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;To me it looks nice and elegant. This custom &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetailsService&lt;/code&gt; returns &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CustomUserDetails&lt;/code&gt; based on what persistence layer returns, so the encapsulated DTO object can always be used for interaction with other DTOs or persistence services.&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@Service&lt;/span&gt;
+&lt;span class=&quot;nd&quot;&gt;@RequiredArgsConstructor&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CustomUserDetailsService&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;implements&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDetailsService&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;final&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDTOService&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDTOService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;loadUserByUsername&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UsernameNotFoundException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;Optional&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Optional&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;ofNullable&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDTOService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;findByUsername&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isEmpty&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;throw&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;UsernameNotFoundException&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Username &quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;username&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot; not found&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;CustomUserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;how-do-i-test-this-controller&quot;&gt;How do I test this controller?&lt;/h2&gt;
+
+&lt;p&gt;However, this approach implies some issues when it comes to testing the controller.&lt;/p&gt;
+
+&lt;p&gt;While trying to test &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserControllerImpl.userImages()&lt;/code&gt; I realized I need to somehow mock the parameter &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@AuthenticationPrincipal CustomUserDetails userDetails&lt;/code&gt;. Not knowing much about it, I did some googling and found out, that &lt;a href=&quot;https://stackoverflow.com/questions/46615504/springboottest-mock-authentication-principal-with-a-custom-user-does-not-work&quot;&gt;others[1]&lt;/a&gt; use &lt;a href=&quot;https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithMockUser.html&quot;&gt;@WithMockUser[2]&lt;/a&gt; annotation in situations like that. However, this turned out unsatisfactionary for my case, since the method I want to test doesn’t just restrict an access to some commonly-used resource. If I was, for example, testing the accessibility of resources that should only be used by specified group of users, that would be perfect. Using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@WithMockUser&lt;/code&gt; I can specify roles and/or authorities required to access the resource, then test if access is granted (or properly rejected for mocked users with insufficient authorities). Or even a simpler case, having an endpoint returning user’s username. Just a quick &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@WithMockUser(username = &quot;foo&quot;)&lt;/code&gt; and a job is done!&lt;/p&gt;
+
+&lt;p&gt;Meanwhile, my resource uses the principal to pass the encapsulated user DTO to the service. It delegates the job to the persistence layer, which requires DTO object which can be later be mapped to full-fleged entity. Therefore, I needed full-fleged authentication principal mocking.&lt;/p&gt;
+
+&lt;h2 id=&quot;trying-to-mock-the-principal-by-interference-in-security-context&quot;&gt;Trying to mock the principal by interference in Security Context&lt;/h2&gt;
+
+&lt;p&gt;What exactly is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@AuthenticationPrincipal&lt;/code&gt;? According to the &lt;a href=&quot;https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/core/annotation/AuthenticationPrincipal.html&quot;&gt;Spring Security documentation[3]&lt;/a&gt;, it ties up a method argument with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authentication.getPrincipal()&lt;/code&gt; return object. &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authentication&lt;/code&gt; object can be easily obtained from &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SecurityContextHolder&lt;/code&gt;, so using some help of this &lt;a href=&quot;https://stackoverflow.com/a/46631015/6158307&quot;&gt;stack overflow answer[4]&lt;/a&gt; I came up with these few lines of code:&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@SpringBootTest&lt;/span&gt;
+&lt;span class=&quot;nd&quot;&gt;@AutoConfigureMockMvc&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserControllerImplTest&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Test&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;whenGetUserImages_andUserIsAuthorized_thenReturnListOfImages&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Exception&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;username&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;username&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDTO&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getSampleUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;Authentication&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;authentication&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;mock&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Authentication&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;SecurityContext&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;securityContext&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;mock&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;SecurityContext&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;AuthCookieFilter&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;authCookieFilter&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;mock&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;AuthCookieFilter&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+
+        &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;when&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;securityContext&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getAuthentication&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;thenReturn&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;authentication&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;SecurityContextHolder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setContext&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;securityContext&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;when&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;authentication&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getPrincipal&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;thenReturn&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;doNothing&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;when&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;authCookieFilter&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;doFilter&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;any&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ServletRequest&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;),&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;any&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ServletResponse&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;),&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;any&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;FilterChain&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;images&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getSampleImages&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;forEach&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;imageDTO&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;imageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setUploader&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;when&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;imageDTOService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;findAllUploadedBy&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;thenReturn&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;n&quot;&gt;mockMvc&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;perform&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;/user/images/&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;andExpect&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isOk&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;andExpect&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;content&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;contentType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;MediaType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;APPLICATION_JSON&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;andExpect&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;content&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;json&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;expected json response content goes here&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getSampleUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;builder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;email&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;username&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;@example.com&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;password&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;registerTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;LocalDateTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2020&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;12&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kc&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;build&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getSampleImages&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;image1&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getSampleImage&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1L&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;token1&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;image2&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getSampleImage&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2L&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;token2&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;image3&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getSampleImage&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3L&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;token3&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;image1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;image2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;image3&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getSampleImage&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;token&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;builder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;id&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;token&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;token&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kc&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isPublic&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kc&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;uploadTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;LocalDateTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2020&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;12&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;build&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AuthCookieFilter&lt;/code&gt; is my request filter (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;GenericFilterBean&lt;/code&gt;), scanning requests for &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authorization&lt;/code&gt; token, looking their content up in database and setting &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authentication&lt;/code&gt; in &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SecurityContextHolder&lt;/code&gt; if it matches any. I had to silence it, since I’m setting up the Security Context up manually.&lt;/p&gt;
+
+&lt;p&gt;Unfortunately, it didn’t work. For some reason, I couldn’t get pass authorization, getting 401 responses all the time. After some time debugging, I found that one of the first culprits of failing the authentication is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ProviderManager.authenticate()&lt;/code&gt; throwing a &lt;a href=&quot;https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/authentication/ProviderNotFoundException.html&quot;&gt;ProviderNotFoundException[5]&lt;/a&gt;. So, there’s no &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AuthenticationProvider&lt;/code&gt; capable of handling my &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authentication&lt;/code&gt;, huh? What’s the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authentication&lt;/code&gt; now, anyway? According to the debugger: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Authentication$MockitoMock&lt;/code&gt;. Honestly, I don’t really know much about how mocks work internally. How are public properties and methods made visible, how references to them are being passed and most importantly, how is such an object perceived by other components of the application? My guess was that &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ProviderManager&lt;/code&gt; can’t match any provider with my not-so-ordinary object.&lt;/p&gt;
+
+&lt;p&gt;And so, I decided to abadon this idea and keep looking further.&lt;/p&gt;
+
+&lt;h2 id=&quot;injecting-custom-userdetailsservice&quot;&gt;Injecting custom UserDetailsService&lt;/h2&gt;
+
+&lt;p&gt;Then I stumbled upon this &lt;a href=&quot;https://stackoverflow.com/a/43920932/6158307&quot;&gt;stack overflow answer[6]&lt;/a&gt;, that made me aware of &lt;a href=&quot;https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithUserDetails.html&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@WithUserDetails&lt;/code&gt;[7]&lt;/a&gt; annotation. Similarly to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@WithMockUser&lt;/code&gt; it allows to inject a mock user to the request, but delegating the job of creating &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetails&lt;/code&gt; object to the developer. &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@WithMockUser&lt;/code&gt; is higher level functionality, creating a simple &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetails&lt;/code&gt; based on input parameters. With &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@WithUserDetails&lt;/code&gt; one needs to provide own &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetailsService&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Perfect! I created additional configuration class for such a custom service:&lt;/p&gt;
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@TestConfiguration&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;SpringSecurityForUserControllerImplTestConfig&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Bean&lt;/span&gt;
+    &lt;span class=&quot;nd&quot;&gt;@Primary&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDetailsService&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;userDetailsService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDTO&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;builder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;username&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;email&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;username@example.com&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;password&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;registerTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;LocalDateTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2020&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;12&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kc&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;role&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;RoleDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;builder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;roleName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;USER&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;build&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;build&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;InMemoryUserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;added &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@SpringBootTest(classes = SpringSecurityForUserControllerImplTestConfig.class)&lt;/code&gt; above tests class and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@WithUserDetails(&quot;username&quot;)&lt;/code&gt; above the test. To retrieve &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDTO&lt;/code&gt; object inside test method I used the following line:&lt;/p&gt;
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDTO&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;SecurityContextHolder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getContext&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getAuthentication&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getPrincipal&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;which unfortunately resulted in ClassCastException between &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;org.springframework.security.core.userdetails.User&lt;/code&gt; and my &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CustomUserDetails&lt;/code&gt;. It turns out, that &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;InMemoryUserDetailsManager&lt;/code&gt; method has this method:&lt;/p&gt;
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;loadUserByUsername&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UsernameNotFoundException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;users&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;toLowerCase&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;user&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;kc&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;throw&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;UsernameNotFoundException&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;User&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getUsername&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getPassword&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isEnabled&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isAccountNonExpired&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isCredentialsNonExpired&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isAccountNonLocked&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;user&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;getAuthorities&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;explictly casting found principals to Spring generic User class, despite my custom implementaion of UserDetails put into it. That’s sad.&lt;/p&gt;
+
+&lt;h2 id=&quot;final-solution&quot;&gt;Final solution&lt;/h2&gt;
+&lt;p&gt;Here’s test-scope class with custom &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDetailsManager&lt;/code&gt; implementation altering &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;InMemoryUserDetailsManager.loadUserByUsername&lt;/code&gt; unwanted behavior. It could’ve been done better, this implementation assumes there is only one user object stored inside by the Manager. &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;UserDTO&lt;/code&gt; was turned into a Bean, to allow easy access to it via autowiring from the test class.&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@TestConfiguration&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;SpringSecurityForUserControllerImplTestConfig&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Bean&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;testUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;builder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;username&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;username&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;email&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;username@example.com&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;password&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;password&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;registerTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;LocalDateTime&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2020&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;12&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isActive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kc&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;role&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;RoleDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;builder&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;roleName&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;USER&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;build&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;build&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Bean&lt;/span&gt;
+    &lt;span class=&quot;nd&quot;&gt;@Primary&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDetailsService&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;userDetailsService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;CustomUserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;testUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;UserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+            &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;final&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;InMemoryUserDetailsManager&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;inMemoryUserDetailsManager&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;InMemoryUserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;of&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+
+
+            &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;createUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;inMemoryUserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;createUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;updateUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;inMemoryUserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;updateUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;userDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;deleteUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;inMemoryUserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;deleteUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;changePassword&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;s1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;inMemoryUserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;changePassword&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;s1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;boolean&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;userExists&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;inMemoryUserDetailsManager&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;userExists&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+
+            &lt;span class=&quot;nd&quot;&gt;@Override&lt;/span&gt;
+            &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserDetails&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;loadUserByUsername&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UsernameNotFoundException&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;CustomUserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;testUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;());&lt;/span&gt;
+            &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+        &lt;span class=&quot;o&quot;&gt;};&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Test class now looks as following:&lt;/p&gt;
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nd&quot;&gt;@SpringBootTest&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;classes&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;SpringSecurityForUserControllerImplTestConfig&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;class&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;nd&quot;&gt;@AutoConfigureMockMvc&lt;/span&gt;
+&lt;span class=&quot;kd&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;UserControllerImplTest&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Autowired&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MockMvc&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mockMvc&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@MockBean&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;ImageDTOService&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;imageDTOService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Autowired&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;UserDTO&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;testUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;nd&quot;&gt;@Test&lt;/span&gt;
+    &lt;span class=&quot;nd&quot;&gt;@WithUserDetails&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;username&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;whenGetUserImages_andUserIsAuthorized_thenReturnListOfImages&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;throws&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Exception&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;ImageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;images&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;getSampleImages&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;();&lt;/span&gt;
+        &lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;forEach&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;imageDTO&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;imageDTO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;setUploader&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;testUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+
+        &lt;span class=&quot;nc&quot;&gt;Mockito&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;when&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;imageDTOService&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;findAllUploadedBy&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;testUser&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)).&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;thenReturn&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+
+        &lt;span class=&quot;n&quot;&gt;mockMvc&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;perform&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;/user/images/&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;andExpect&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;status&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;isOk&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;())&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;andExpect&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;content&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;contentType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;MediaType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;APPLICATION_JSON&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;andExpect&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;content&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;json&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;
+                        &lt;span class=&quot;s&quot;&gt;&quot;[\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;  {\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;id\&quot;: 1,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;isActive\&quot;: true,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;isPublic\&quot;: true,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;title\&quot;: null,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;token\&quot;: \&quot;token1\&quot;,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;uploadTime\&quot;: \&quot;2020-01-01T12:00:00\&quot;,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;uploader\&quot;: \&quot;username\&quot;\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;  },\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;  {\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;id\&quot;: 2,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;isActive\&quot;: true,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;isPublic\&quot;: true,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;title\&quot;: null,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;token\&quot;: \&quot;token2\&quot;,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;uploadTime\&quot;: \&quot;2020-01-01T12:00:00\&quot;,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;uploader\&quot;: \&quot;username\&quot;\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;  },\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;  {\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;id\&quot;: 3,&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;isActive\&quot;:true,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;isPublic\&quot;: true,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;title\&quot;: null,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;token\&quot;: \&quot;token3\&quot;,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;uploadTime\&quot;: \&quot;2020-01-01T12:00:00\&quot;,\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;    \&quot;uploader\&quot;: \&quot;username\&quot;&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;  }\n&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;
+                                &lt;span class=&quot;s&quot;&gt;&quot;]&quot;&lt;/span&gt;
+                &lt;span class=&quot;o&quot;&gt;));&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;And it passes the test at last! 🎉🥰&lt;/p&gt;
+
+&lt;h2 id=&quot;links&quot;&gt;Links&lt;/h2&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[0]: https://golb.hplar.ch/2019/05/stateless.html
+[1]: https://stackoverflow.com/questions/46615504/springboottest-mock-authentication-principal-with-a-custom-user-does-not-work
+[2]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithMockUser.html
+[3]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/core/annotation/AuthenticationPrincipal.html
+[4]: https://stackoverflow.com/a/46631015/6158307
+[5]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/authentication/ProviderNotFoundException.html
+[6]: https://stackoverflow.com/a/43920932/6158307
+[7]: https://docs.spring.io/spring-security/site/docs/current/api/org/springframework/security/test/context/support/WithUserDetails.html
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+</description>
+        <pubDate>Sun, 20 Sep 2020 19:00:00 +0000</pubDate>
+        <link>https://babarowski.com//blog/mock-authentication-with-custom-userdetails/</link>
+        <guid isPermaLink="true">https://babarowski.com//blog/mock-authentication-with-custom-userdetails/</guid>
+        
+        <category>java</category>
+        
+        <category>junit</category>
+        
+        <category>spring</category>
+        
+        <category>mockito</category>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+  </channel>
+</rss>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Blog Posts | max dev blog & other stuff</title>
+
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="/css/bootstrap-3.3.6/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+
+    <link rel="shortcut icon" href="/images/favicon.jpg">
+
+    <link rel="alternate" type="application/atom+xml" title="Atom Feed" href="/feed/"> 
+
+</head>
+
+
+    <body>
+      <div class="container">
+
+        <header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"maksymilian"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"babarowski"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"k0mmsussert0d"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://github.com/k0mmsussert0d" target="_blank">https://github.com/<span class="reserved">%s\n</span></span></a>", github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>, name, surname);
+    </p>
+  </div>
+</header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
+
+<div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="menu">
+      <ul>
+          <li><a href="/">home</a></li>
+          <li><a href="/blog/">archive</a></li>
+          <li><a href="/about/">about</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2">
+            <main>
+            <div class="post">
+
+  <header class="post-header">
+    <h1>Blog Posts</h1>
+  </header>
+
+  <article class="post-content">
+  <div style="width:100%;text-align:right;">
+    <a href="/category/" title="Category List">Category List</a>
+    |
+    <a href="/feed/" title="Atom Feed Posts">Atom Feed</a>
+</div>
+
+
+<ul class="posts">
+    
+        <li>
+            <div>Sep 20, 2022</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/pve-cloud-backup/">Proxmox cloud backup</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#linux" class="reserved">linux</a>,</span><span><a href="https://babarowski.comcategory/#proxmox" class="reserved">proxmox</a>,</span><span><a href="https://babarowski.comcategory/#sysop" class="reserved">sysop</a></span>
+            
+            }
+        </li>
+    
+        <li>
+            <div>Jan 28, 2022</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/how-to-restrict-network-in-lxc/">How to restrict network access of LXC container</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#itsec" class="reserved">itsec</a>,</span><span><a href="https://babarowski.comcategory/#linux" class="reserved">linux</a>,</span><span><a href="https://babarowski.comcategory/#tutorial" class="reserved">tutorial</a></span>
+            
+            }
+        </li>
+    
+        <li>
+            <div>Jan 15, 2022</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/compiling-python34-in-2022/">Compiling Python &lt;3.5.3 in 2022</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#linux" class="reserved">linux</a>,</span><span><a href="https://babarowski.comcategory/#python" class="reserved">python</a></span>
+            
+            }
+        </li>
+    
+        <li>
+            <div>Dec 02, 2021</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/wine-not-detecting-disks/">Wine not detecting drives in winecfg</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#linux" class="reserved">linux</a></span>
+            
+            }
+        </li>
+    
+        <li>
+            <div>Nov 07, 2021</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/change-gtk-file-picker-to-kde-dolphin/">Change GTKFileChooser to KDE Dolphin file chooser in Arch Linux</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#arch" class="reserved">arch</a>,</span><span><a href="https://babarowski.comcategory/#linux" class="reserved">linux</a>,</span><span><a href="https://babarowski.comcategory/#ricing" class="reserved">ricing</a></span>
+            
+            }
+        </li>
+    
+        <li>
+            <div>Jul 20, 2021</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/bspwm-intellij-fix/">Fix JetBrains IDEA IntelliJ not working on bspwm (gray window issue)</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#java" class="reserved">java</a>,</span><span><a href="https://babarowski.comcategory/#linux" class="reserved">linux</a>,</span><span><a href="https://babarowski.comcategory/#ricing" class="reserved">ricing</a></span>
+            
+            }
+        </li>
+    
+        <li>
+            <div>Oct 03, 2020</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/how-did-i-beat-obscure-zlib-compression-format/">How I cracked obscure zlib compression format of old MySQL blobs</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#piracy" class="reserved">piracy</a>,</span><span><a href="https://babarowski.comcategory/#puzzle" class="reserved">puzzle</a>,</span><span><a href="https://babarowski.comcategory/#random" class="reserved">random</a></span>
+            
+            }
+        </li>
+    
+        <li>
+            <div>Sep 20, 2020</div>
+            ::
+            <a class="post-link" href="https://babarowski.com/blog/mock-authentication-with-custom-userdetails/">Mocking @AuthenticationPrincipal with custom UserDetails object</a>
+            @ {
+            
+            <span><a href="https://babarowski.comcategory/#java" class="reserved">java</a>,</span><span><a href="https://babarowski.comcategory/#junit" class="reserved">junit</a>,</span><span><a href="https://babarowski.comcategory/#mockito" class="reserved">mockito</a>,</span><span><a href="https://babarowski.comcategory/#spring" class="reserved">spring</a></span>
+            
+            }
+        </li>
+    
+</ul>
+
+
+  </article>
+
+</div>
+
+            </main>
+          </div>
+        </div>
+
+        <div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <footer>
+      Thx!
+    </footer>
+  </div>
+</div>
+
+
+      </div>
+    </body>
+</html>

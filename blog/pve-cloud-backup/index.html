@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Proxmox cloud backup | max dev blog & other stuff</title>
+
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="/css/bootstrap-3.3.6/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+          <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+          <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+        <![endif]-->
+
+    <link rel="shortcut icon" href="/images/favicon.jpg">
+
+    <link rel="alternate" type="application/atom+xml" title="Atom Feed" href="/feed/"> 
+
+</head>
+
+
+    <body>
+      <div class="container">
+
+        <header class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="row">
+      <div class="col-lg-2 col-lg-offset-10">
+        <select class="style-select" id="style-selector" name="stylesheet">
+          <option value="dark">Dark mode</option>
+          <option value="light">Light mode</option>
+        </select>
+      </div>
+    </div>
+    <h1 class="">max dev blog & other stuff</h1>
+    <p>
+    <span class="reserved">char</span> name[<span class="number"></span>] = <span class="string">"maksymilian"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> surname[<span class="number"></span>] = <span class="string">"babarowski"</span>;
+    </p>
+    <p>
+    <span class="reserved">char</span> github[<span class="number"></span>] = <span class="string">"k0mmsussert0d"</span>;
+    </p>
+    <br />
+    <p>
+    printf("<span class="string">repo: <a href="https://github.com/k0mmsussert0d" target="_blank">https://github.com/<span class="reserved">%s\n</span></span></a>", github);
+    </p>
+    <p>
+    printf(<span class="string">"e-mail: <span class="reserved">%s</span>@<span class="reserved">%s</span>.pl<span class="reserved">\n</span>"</span>, name, surname);
+    </p>
+  </div>
+</header>
+<script type="text/javascript">
+  let savedTheme = localStorage.getItem("data-theme");
+  let selector = document.getElementById("style-selector");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+    selector.value = savedTheme;
+  }
+  selector.addEventListener("change", function(event){
+    if (event.target.value === 'light') {
+      document.body.setAttribute('data-theme', 'light');
+      localStorage.setItem("data-theme", "light");
+    } else if (event.target.value === 'dark') {
+      document.body.removeAttribute('data-theme');
+      localStorage.setItem("data-theme", "dark");
+    } else {
+      console.error("lolwut");
+    }
+  })
+</script>
+
+<div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <div class="menu">
+      <ul>
+          <li><a href="/">home</a></li>
+          <li><a href="/blog/">archive</a></li>
+          <li><a href="/about/">about</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2">
+            <main>
+            <div class="post">
+
+  <header class="post-header">
+    <h1>Proxmox cloud backup</h1>
+  </header>
+
+  <article class="post-content">
+  <div class="post">
+
+  <header class="post-header">
+    <p class="meta">
+        Sep 20, 2022
+        
+        
+        •
+        <span><a href="/category/#linux" class="reserved">linux</a>,</span><span><a href="/category/#sysop" class="reserved">sysop</a>,</span><span><a href="/category/#proxmox" class="reserved">proxmox</a></span>
+    </p>
+  </header>
+
+  <article class="post-content">
+  <p>If you are running <a href="https://www.proxmox.com/en/proxmox-ve">Proxmox Virtual Environment [0]</a> in your infra, chances are that you utilize the <a href="https://pve.proxmox.com/wiki/Backup_and_Restore">Backup and Restore functionality [1]</a>. Like many other PVE features, its web GUI is devoid of a large number of controls for managing options described in the documentation.</p>
+
+<p>Within this short entry I want to demonstrate setup I’ve came up with for <strong>synchronizing Proxmox VMs/CTs to Backblaze B2 cloud backup</strong> using hook scripts feature.</p>
+
+<!--break-->
+
+<h2 id="prerequisites">Prerequisites</h2>
+
+<p>Before proceeding, you should be in control of a <a href="https://www.backblaze.com/b2/cloud-storage.html">Backblaze B2 account [2]</a> with a configured bucket to upload dumps to. Alternatively, you should be fine using any other remote storage provided <a href="https://rclone.org/#providers">supported by rclone [3]</a>. My choice of Backblaze is justified by the affordable pricing model they employ.</p>
+
+<p>I’m also assuming that you have a configured backup job in PVE. Specifics don’t matter; the job can cover any number of machines, have whichever schedule and use any other options. A single backup job is tied to a single storage device for storing resulting dumps, so we can be sure all backups will be kept in the same location.</p>
+
+<h2 id="backup-job-hook-scripts">Backup job hook scripts</h2>
+
+<p><a href="https://pve.proxmox.com/wiki/Backup_and_Restore#_hook_scripts">Hook script [4]</a>, in terms of PVE’s backups functionality, is an optional script set per job called at various phases of its execution. An example Perl script provided with <code class="language-plaintext highlighter-rouge">pve-manager</code> documentation enumerates the phases script might be called at:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>job-start
+job-end
+job-abort
+backup-start
+backup-end
+backup-abort
+log-end
+pre-stop
+pre-restart
+post-restart
+</code></pre></div></div>
+
+<p>The phase is passed to the script as the parameter.</p>
+
+<h2 id="rclone">rclone</h2>
+
+<p>We’re on the right track with integrating custom processes into PVE backup jobs. Let’s focus on preparing the process itself before <em>hooking it up</em> to the job.</p>
+
+<p>Assuming that you’ve already created a Backblaze bucket, you should be in possession of API key and secret key.</p>
+
+<p>Install <code class="language-plaintext highlighter-rouge">rclone</code> on the machine running PVE instance and run <code class="language-plaintext highlighter-rouge">rclone config</code>. Use the interactive prompt to configure the access to the bucket. Try running commands like <code class="language-plaintext highlighter-rouge">rclone ls &lt;bucket-name&gt;:</code> and <code class="language-plaintext highlighter-rouge">rclone copy &lt;sample-file&gt; &lt;bucket-name&gt;:</code> to verify if it works correctly. <code class="language-plaintext highlighter-rouge">rclone</code> should be capable of both reading and writing files.</p>
+
+<h2 id="preparing-the-sync-script">Preparing the sync script</h2>
+
+<p>The script should run only after the backup job is entirely finished. Make sure the job is configured in <em>Datacenter &gt; Backup</em> tab, then SSH into the server.</p>
+
+<p>Create a new file in a directory convenient for you. Then, paste in the following content:</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c">#!/bin/bash</span>
+
+<span class="k">if</span> <span class="o">[</span> <span class="s2">"</span><span class="nv">$1</span><span class="s2">"</span> <span class="o">==</span> <span class="s2">"job-end"</span> <span class="o">]</span><span class="p">;</span> <span class="k">then
+    </span>rclone <span class="nt">--config</span> /root/.config/rclone/rclone.conf <span class="nt">--min-age</span> 2w delete &lt;bucket-name&gt;:&lt;bucket-path&gt;
+    rclone <span class="nt">--config</span> /root/.config/rclone/rclone.conf copy &lt;storage-path&gt; &lt;bucket-name&gt;:&lt;bucket-path&gt;
+<span class="k">fi</span>
+</code></pre></div></div>
+
+<p><code class="language-plaintext highlighter-rouge">if [ "$1" == "job-end" ]</code> is the script entrypoint safeguard. The script will be called on multiple stages of the execution of any backup job, but sync should only happen after it’s finished.</p>
+
+<p>All <code class="language-plaintext highlighter-rouge">rclone</code> commands are appended with <code class="language-plaintext highlighter-rouge">--config</code> option followed by the config file location. In my case, <code class="language-plaintext highlighter-rouge">rclone</code> would fail to locate the config file when called by cron.</p>
+
+<p>First command, <code class="language-plaintext highlighter-rouge">delete</code> with <code class="language-plaintext highlighter-rouge">--min-age</code> option is my simple approach to implementing backups rotation mechanism. You can replace the value of 2 weeks with a retention time that suits you. Alternatively, you can apply <a href="https://www.backblaze.com/b2/docs/file_versions.html">lifecycle rules[5]</a> to the bucket, so that the files will be purged automatically after specified period of time.</p>
+
+<p><img src="/images/2022/lifecycle_rules.png" alt="Screenshot showing a lifecycle settings of a sample B2 bucket" /></p>
+
+<div class="note">
+<p>Pay attention to the `hard_delete` option in the `rclone` config of your B2 bucket. By default, it is set to `false` and the wizard prompts you about it during the configuration setup. If the bucket lifecycle policy is **not** set to *Keep only the last version of the file*, `rclone delete` will not in fact delete a file from the bucket. Instead, it is going to hide the file[6] with the hide marker.</p>
+<p>Hidden files consume storage space and you are charged for them. By default, B2 buckets keep all revisions of the file.</p>
+</div>
+
+<p>Second command, <code class="language-plaintext highlighter-rouge">copy</code>, actually synchronizes content of the <code class="language-plaintext highlighter-rouge">&lt;storage-path&gt;</code> with <code class="language-plaintext highlighter-rouge">&lt;bucket-path&gt;</code> of the bucket denoted by <code class="language-plaintext highlighter-rouge">&lt;bucket-name&gt;</code>.</p>
+
+<p>Replace the script with the actual path of backup dumps location and target bucket name, then edit <code class="language-plaintext highlighter-rouge">/etc/pve/vzdump.cron</code> file.</p>
+
+<p>Warning in the heading comment can be safely ignored. Making changes to the job using web front-end writes changes directly to this file. We will be adding the option that is not possible to add with the GUI. Any further changes made to the job using the GUI won’t affect it.</p>
+
+<p>Find the line responsible for scheduling the backup job of your choice and add the option <code class="language-plaintext highlighter-rouge">--script &lt;path-to-script&gt;</code> with a path to the script you’ve just created. For example:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>30 3 * * 7      root vzdump 100 --quiet 1 --mode snapshot --script /root/b2-sync.sh --node node-0 --storage vms-storage --compress ztsd --mailnotification always
+</code></pre></div></div>
+
+<h2 id="whats-next">What’s next?</h2>
+
+<p>You’ve just configured Proxmox backup dumps synchronization with off-site cloud storage hooked with to the backup job finish. If you want to take this setup to the next level, try implementing complex backup retention rules. For example, desired rotation strategy would be:</p>
+<ul>
+  <li>keep the latest 14 daily dumps,</li>
+  <li>keep the latest 8 weekly dumps,
+etc.</li>
+</ul>
+
+<h2 id="links">Links</h2>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[0]: https://www.proxmox.com/en/proxmox-ve
+[1]: https://pve.proxmox.com/wiki/Backup_and_Restore
+[2]: https://www.backblaze.com/b2/cloud-storage.html
+[3]: https://rclone.org/#providers
+[4]: https://pve.proxmox.com/wiki/Backup_and_Restore#_hook_scripts
+[5]: https://www.backblaze.com/b2/docs/file_versions.html
+[6]: https://www.backblaze.com/b2/docs/b2_hide_file.html
+</code></pre></div></div>
+
+
+  </article>
+
+	<p class="feed-recomendation">
+		💞 Did you like the post? Add my blog to your RSS feed! <a href="/feed/">[click]</a> 💞
+	</p>
+
+  <div id="disqus_thread"></div>
+<script type="text/javascript">
+    /* * * CONFIGURATION VARIABLES * * */
+    var disqus_shortname = '';
+    var disqus_config = function () {
+        this.page.identifier = "/blog/pve-cloud-backup/";
+    };
+    
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a></noscript>
+
+
+
+
+</div>
+
+  </article>
+
+</div>
+
+            </main>
+          </div>
+        </div>
+
+        <div class="row">
+  <div class="col-lg-8 col-lg-offset-2">
+    <footer>
+      Thx!
+    </footer>
+  </div>
+</div>
+
+
+      </div>
+    </body>
+</html>
