@@ -1,0 +1,13 @@
+baseURL = 'https://babarowski.com'
+languageCode = 'en-us'
+theme = 'anubis2'
+title = 'max dev blog & other stuff'
+
+[author]
+name = 'Maksymilian Babarowski'
+
+[markup.goldmark.renderer]
+unsafe = true
+
+[markup.highlight]
+style = 'base16-snazzy'
